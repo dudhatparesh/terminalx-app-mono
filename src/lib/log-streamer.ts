@@ -46,7 +46,22 @@ function validateLogPath(filePath: string): string {
     throw new Error("Path is not within allowed log directories");
   }
 
-  return resolved;
+  // Follow symlinks and re-check to prevent symlink traversal
+  try {
+    const realPath = fs.realpathSync(resolved);
+    const realIsAllowed = allowedDirs.some(
+      (dir) => realPath.startsWith(dir + path.sep) || realPath === dir
+    );
+    if (!realIsAllowed) {
+      throw new Error("Path is not within allowed log directories");
+    }
+    return realPath;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return resolved;
+    }
+    throw err;
+  }
 }
 
 export function createLogStream(filePath: string): LogStream {
