@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import { signJwt, comparePassword } from "@/lib/auth";
 import { getAuthMode, getSinglePassword } from "@/lib/auth-config";
 import { getUserByUsername, updateLastLogin, ensureDefaultAdmin } from "@/lib/users";
@@ -54,12 +55,12 @@ function makeSessionCookie(token: string, req: NextRequest): string {
 // ── POST /api/auth/login ────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
-  const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    req.headers.get("x-real-ip") ||
-    "unknown";
+  // Use a fixed global key for rate limiting to prevent IP spoofing via
+  // x-forwarded-for. All login attempts share the same 5/min limit.
+  // For a self-hosted app this is safer than trusting proxy headers.
+  const rateLimitKey = "global";
 
-  if (isRateLimited(ip)) {
+  if (isRateLimited(rateLimitKey)) {
     return NextResponse.json(
       { error: "Too many login attempts. Try again later." },
       { status: 429 }
@@ -100,7 +101,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (password !== expected) {
+    const a = Buffer.from(password);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
       return NextResponse.json(
         { error: "Invalid password" },
         { status: 401 }

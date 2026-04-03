@@ -47,7 +47,21 @@ export function resolveSafePath(requestedPath: string): string {
     throw new Error("Path is outside the allowed root directory");
   }
 
-  return expanded;
+  // Follow symlinks and re-check to prevent symlink traversal
+  try {
+    const realPath = fs.realpathSync(expanded);
+    if (!realPath.startsWith(root + path.sep) && realPath !== root) {
+      throw new Error("Path is outside the allowed root directory");
+    }
+    return realPath;
+  } catch (err) {
+    // realpathSync throws if the path doesn't exist yet (e.g. new file creation).
+    // In that case the initial check above is sufficient since no symlink exists.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return expanded;
+    }
+    throw err;
+  }
 }
 
 function entryType(

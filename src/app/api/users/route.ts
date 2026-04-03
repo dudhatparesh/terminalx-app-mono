@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUsers, createUser, deleteUser, updateUserRole } from "@/lib/users";
+import { getUsers, createUser, deleteUser, updateUserRole, getUserById } from "@/lib/users";
 import { getAuthMode } from "@/lib/auth-config";
 
 function isAdmin(req: NextRequest): boolean {
@@ -104,6 +104,18 @@ export async function DELETE(req: NextRequest) {
   const { id } = body;
   if (!id || typeof id !== "string") {
     return NextResponse.json({ error: "User ID is required" }, { status: 400 });
+  }
+
+  // Prevent deleting the last admin user
+  const targetUser = getUserById(id);
+  if (targetUser && targetUser.role === "admin") {
+    const adminCount = getUsers().filter((u) => u.role === "admin").length;
+    if (adminCount <= 1) {
+      return NextResponse.json(
+        { error: "Cannot delete the last admin user" },
+        { status: 400 }
+      );
+    }
   }
 
   try {

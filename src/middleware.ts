@@ -20,12 +20,23 @@ function getAuthModeEdge(): "none" | "password" | "local" | "oauth" {
 
 const PUBLIC_PATHS = ["/login", "/api/auth/", "/_next/", "/favicon.ico"];
 
+/**
+ * Strip user identity headers to prevent spoofing from untrusted clients.
+ * These headers are only set by the middleware itself after JWT verification.
+ */
+function stripUserHeaders(response: NextResponse): NextResponse {
+  response.headers.set("x-user-id", "");
+  response.headers.set("x-user-role", "");
+  response.headers.set("x-username", "");
+  return response;
+}
+
 export async function middleware(req: NextRequest) {
   const authMode = getAuthModeEdge();
 
   // No auth required
   if (authMode === "none") {
-    return NextResponse.next();
+    return stripUserHeaders(NextResponse.next());
   }
 
   const { pathname } = req.nextUrl;
@@ -33,23 +44,22 @@ export async function middleware(req: NextRequest) {
   // Skip auth for public paths
   for (const p of PUBLIC_PATHS) {
     if (pathname === p || pathname.startsWith(p)) {
-      return NextResponse.next();
+      return stripUserHeaders(NextResponse.next());
     }
   }
 
   // Parse JWT from cookie
   const token = req.cookies.get("terminalx-session")?.value;
   if (!token) {
-    return NextResponse.redirect(new URL("/login", req.url));
+    return stripUserHeaders(NextResponse.redirect(new URL("/login", req.url)));
   }
 
   const secret = getJwtSecretEdge();
   if (!secret) {
     // No secret configured — cannot verify tokens.
-    // In file-based secret mode, middleware can't read the file,
-    // so we pass through and let the API routes handle auth.
-    const response = NextResponse.next();
-    return response;
+    // Redirect to login rather than passing through unauthenticated,
+    // to prevent auth bypass when TERMINALX_JWT_SECRET env var is not set.
+    return stripUserHeaders(NextResponse.redirect(new URL("/login", req.url)));
   }
 
   try {
@@ -63,7 +73,7 @@ export async function middleware(req: NextRequest) {
     // Invalid or expired token
     const response = NextResponse.redirect(new URL("/login", req.url));
     response.cookies.delete("terminalx-session");
-    return response;
+    return stripUserHeaders(response);
   }
 }
 

@@ -41,6 +41,7 @@ const TERMINUS_MAX_SESSIONS = parseInt(
   10
 );
 const TERMINUS_READ_ONLY = process.env.TERMINUS_READ_ONLY === "true";
+const TERMINUS_HOST = process.env.TERMINUS_HOST || "0.0.0.0";
 
 setMaxSessions(TERMINUS_MAX_SESSIONS);
 
@@ -98,6 +99,15 @@ terminalWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   if (!sessionId || !/^[a-zA-Z0-9_.\-]+$/.test(sessionId)) {
     ws.close(1008, "Invalid session ID");
     return;
+  }
+
+  // Per-user scoping: non-admin users can only access their own sessions
+  const user = (req as any).user;
+  if (user && (AUTH_MODE === "local" || AUTH_MODE === "oauth") && user.role === "user") {
+    if (!sessionId.startsWith(`${user.username}-`)) {
+      ws.close(1008, "Access denied");
+      return;
+    }
   }
 
   if (TERMINUS_READ_ONLY) {
@@ -249,7 +259,6 @@ filesWss.on("connection", (ws: WebSocket) => {
           type: "file-event",
           event,
           path: relativePath,
-          absolutePath: filePath,
           timestamp: Date.now(),
         })
       );
@@ -285,8 +294,6 @@ app.prepare().then(() => {
           status: "ok",
           uptime: process.uptime(),
           activePtys: getActivePtyCount(),
-          terminusRoot: TERMINUS_ROOT,
-          readOnly: TERMINUS_READ_ONLY,
           timestamp: new Date().toISOString(),
         })
       );
@@ -340,8 +347,9 @@ app.prepare().then(() => {
     console.error("[auth] Failed to create default admin:", err);
   });
 
-  server.listen(PORT, () => {
-    console.log(`TerminalX server ready on http://localhost:${PORT}`);
+  server.listen(PORT, TERMINUS_HOST, () => {
+    console.log(`TerminalX server ready on http://${TERMINUS_HOST}:${PORT}`);
+    console.log(`  Host:       ${TERMINUS_HOST}`);
     console.log(`  Root:       ${TERMINUS_ROOT}`);
     console.log(`  Shell:      ${TERMINUS_SHELL}`);
     console.log(`  Scrollback: ${TERMINUS_SCROLLBACK}`);

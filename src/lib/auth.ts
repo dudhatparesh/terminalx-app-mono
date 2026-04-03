@@ -37,6 +37,14 @@ export function getJwtSecret(): Uint8Array {
   return cachedSecret;
 }
 
+// ── Token Revocation (in-memory blacklist) ─────────────────────────────────
+
+const revokedTokens = new Set<string>();
+
+export function revokeToken(token: string): void {
+  revokedTokens.add(token);
+}
+
 // ── JWT Sign / Verify ───────────────────────────────────────────────────────
 
 export interface JwtPayload {
@@ -56,6 +64,9 @@ export async function signJwt(payload: JwtPayload): Promise<string> {
 
 export async function verifyJwt(token: string): Promise<JwtPayload | null> {
   try {
+    if (revokedTokens.has(token)) {
+      return null;
+    }
     const secret = getJwtSecret();
     const { payload } = await jwtVerify(token, secret);
     return {

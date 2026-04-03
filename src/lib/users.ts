@@ -23,7 +23,7 @@ const USERS_FILE = path.join(DATA_DIR, "users.json");
 
 function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   }
 }
 
@@ -45,7 +45,7 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
 function atomicWriteUsers(users: User[]): void {
   ensureDataDir();
   const tmpFile = USERS_FILE + ".tmp";
-  fs.writeFileSync(tmpFile, JSON.stringify(users, null, 2), "utf-8");
+  fs.writeFileSync(tmpFile, JSON.stringify(users, null, 2), { encoding: "utf-8", mode: 0o600 });
   fs.renameSync(tmpFile, USERS_FILE);
 }
 
@@ -103,6 +103,10 @@ export async function createUser(
   });
 }
 
+// NOTE: Deleting a user does not revoke their active JWT tokens since we don't
+// track which tokens belong to which user. Tokens will remain valid until they
+// expire (7 days). The in-memory blacklist only covers explicit logout. A future
+// improvement would be to track token-to-user mappings for forced revocation.
 export async function deleteUser(id: string): Promise<void> {
   return withLock(async () => {
     const users = getUsers();
