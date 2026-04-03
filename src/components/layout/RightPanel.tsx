@@ -6,8 +6,12 @@ import { LogViewer } from "@/components/logs/LogViewer";
 
 type RightPanelTab = "files" | "logs";
 
-export function RightPanel() {
-  const [activeTab, setActiveTab] = useState<RightPanelTab>("files");
+interface RightPanelProps {
+  defaultTab?: RightPanelTab;
+}
+
+export function RightPanel({ defaultTab = "files" }: RightPanelProps) {
+  const [activeTab, setActiveTab] = useState<RightPanelTab>(defaultTab);
 
   return (
     <div className="flex flex-col h-full bg-[#151820]">

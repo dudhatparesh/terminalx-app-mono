@@ -1,4 +1,4 @@
-import { execSync, exec } from "child_process";
+import { execFileSync } from "child_process";
 
 export interface TmuxSession {
   name: string;
@@ -24,13 +24,13 @@ function sanitizeSessionName(name: string): string {
 
 export function listSessions(): TmuxSession[] {
   try {
-    const output = execSync(
+    const output = execFileSync(
+      TMUX_BIN,
       [
-        TMUX_BIN,
         "list-sessions",
         "-F",
         "#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_created}",
-      ].join(" "),
+      ],
       { encoding: "utf-8", timeout: 5000 }
     );
 
@@ -59,36 +59,36 @@ export function listSessions(): TmuxSession[] {
 
 export function createSession(name: string): void {
   const safeName = sanitizeSessionName(name);
-  execSync(
-    [TMUX_BIN, "new-session", "-d", "-s", safeName].join(" "),
-    { encoding: "utf-8", timeout: 5000 }
-  );
+  execFileSync(TMUX_BIN, ["new-session", "-d", "-s", safeName], {
+    encoding: "utf-8",
+    timeout: 5000,
+  });
 }
 
 export function killSession(name: string): void {
   const safeName = sanitizeSessionName(name);
-  execSync(
-    [TMUX_BIN, "kill-session", "-t", safeName].join(" "),
-    { encoding: "utf-8", timeout: 5000 }
-  );
+  execFileSync(TMUX_BIN, ["kill-session", "-t", safeName], {
+    encoding: "utf-8",
+    timeout: 5000,
+  });
 }
 
 export function renameSession(oldName: string, newName: string): void {
   const safeOld = sanitizeSessionName(oldName);
   const safeNew = sanitizeSessionName(newName);
-  execSync(
-    [TMUX_BIN, "rename-session", "-t", safeOld, safeNew].join(" "),
-    { encoding: "utf-8", timeout: 5000 }
-  );
+  execFileSync(TMUX_BIN, ["rename-session", "-t", safeOld, safeNew], {
+    encoding: "utf-8",
+    timeout: 5000,
+  });
 }
 
 export function hasSession(name: string): boolean {
   const safeName = sanitizeSessionName(name);
   try {
-    execSync(
-      [TMUX_BIN, "has-session", "-t", safeName].join(" "),
-      { encoding: "utf-8", timeout: 5000 }
-    );
+    execFileSync(TMUX_BIN, ["has-session", "-t", safeName], {
+      encoding: "utf-8",
+      timeout: 5000,
+    });
     return true;
   } catch {
     return false;

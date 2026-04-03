@@ -4,6 +4,7 @@ import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { watch } from "chokidar";
 import * as path from "path";
+import type { Socket } from "net";
 
 // Import server-side modules
 import {
@@ -19,6 +20,9 @@ import {
   destroyLogStream,
   destroyAllLogStreams,
 } from "../src/lib/log-streamer";
+import { verifyJwt, parseCookies } from "../src/lib/auth";
+import { getAuthMode } from "../src/lib/auth-config";
+import { ensureDefaultAdmin } from "../src/lib/users";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -39,6 +43,37 @@ const TERMINUS_MAX_SESSIONS = parseInt(
 const TERMINUS_READ_ONLY = process.env.TERMINUS_READ_ONLY === "true";
 
 setMaxSessions(TERMINUS_MAX_SESSIONS);
+
+const AUTH_MODE = getAuthMode();
+
+// ── WebSocket Auth Helper ──────────────────────────────────────────────────
+
+async function authenticateWebSocket(
+  req: IncomingMessage,
+  socket: Socket
+): Promise<boolean> {
+  if (AUTH_MODE === "none") return true;
+
+  const cookies = parseCookies(req.headers.cookie);
+  const token = cookies["terminalx-session"];
+
+  if (!token) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    socket.destroy();
+    return false;
+  }
+
+  const payload = await verifyJwt(token);
+  if (!payload) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    socket.destroy();
+    return false;
+  }
+
+  // Attach user info to request
+  (req as any).user = payload;
+  return true;
+}
 
 // ── Next.js App ─────────────────────────────────────────────────────────────
 
@@ -263,9 +298,20 @@ app.prepare().then(() => {
   });
 
   // Handle WebSocket upgrade
-  server.on("upgrade", (req: IncomingMessage, socket, head) => {
+  server.on("upgrade", async (req: IncomingMessage, socket: Socket, head) => {
     const parsedUrl = parseUrl(req.url || "", true);
     const pathname = parsedUrl.pathname || "";
+
+    // Only authenticate our WebSocket paths (not Next.js HMR)
+    const isOurWs =
+      pathname.startsWith("/ws/terminal/") ||
+      pathname.startsWith("/ws/logs/") ||
+      pathname === "/ws/files";
+
+    if (isOurWs) {
+      const authed = await authenticateWebSocket(req, socket);
+      if (!authed) return;
+    }
 
     if (pathname.startsWith("/ws/terminal/")) {
       terminalWss.handleUpgrade(req, socket, head, (ws) => {
@@ -280,8 +326,18 @@ app.prepare().then(() => {
         filesWss.emit("connection", ws, req);
       });
     } else {
+      // Pass through to Next.js (needed for HMR WebSocket in dev mode)
+      if (dev) {
+        // Let Next.js handle its own WebSocket upgrades
+        return;
+      }
       socket.destroy();
     }
+  });
+
+  // Ensure default admin user in local mode
+  ensureDefaultAdmin().catch((err) => {
+    console.error("[auth] Failed to create default admin:", err);
   });
 
   server.listen(PORT, () => {
@@ -291,6 +347,7 @@ app.prepare().then(() => {
     console.log(`  Scrollback: ${TERMINUS_SCROLLBACK}`);
     console.log(`  Max PTYs:   ${TERMINUS_MAX_SESSIONS}`);
     console.log(`  Read-only:  ${TERMINUS_READ_ONLY}`);
+    console.log(`  Auth:       ${AUTH_MODE}`);
     console.log(`  Mode:       ${dev ? "development" : "production"}`);
   });
 

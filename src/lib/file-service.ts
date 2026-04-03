@@ -5,6 +5,7 @@ const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1MB
 
 export interface FileEntry {
   name: string;
+  path: string;
   type: "file" | "directory" | "symlink" | "other";
   size: number;
   modified: string;
@@ -30,14 +31,23 @@ function getTerminusRoot(): string {
  */
 export function resolveSafePath(requestedPath: string): string {
   const root = getTerminusRoot();
-  const resolved = path.resolve(root, requestedPath);
+
+  // Handle empty, ".", "/", "~" as root
+  if (!requestedPath || requestedPath === "." || requestedPath === "/" || requestedPath === "~") {
+    return root;
+  }
+
+  // Expand ~ to root
+  const expanded = requestedPath.startsWith("~/")
+    ? path.join(root, requestedPath.slice(2))
+    : path.resolve(root, requestedPath);
 
   // Ensure the resolved path is within or equal to root
-  if (!resolved.startsWith(root + path.sep) && resolved !== root) {
+  if (!expanded.startsWith(root + path.sep) && expanded !== root) {
     throw new Error("Path is outside the allowed root directory");
   }
 
-  return resolved;
+  return expanded;
 }
 
 function entryType(
@@ -75,6 +85,7 @@ export function listDirectory(requestedPath: string): FileEntry[] {
         const stat = fs.statSync(entryPath);
         return {
           name: entry.name,
+          path: entryPath,
           type: entryType(entry),
           size: stat.size,
           modified: stat.mtime.toISOString(),

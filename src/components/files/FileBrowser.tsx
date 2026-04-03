@@ -12,8 +12,9 @@ import {
 interface FileEntry {
   name: string;
   path: string;
-  isDirectory: boolean;
-  size?: number;
+  type: "file" | "directory" | "symlink" | "other";
+  size: number;
+  modified: string;
 }
 
 interface TreeNode extends FileEntry {
@@ -22,9 +23,13 @@ interface TreeNode extends FileEntry {
   loaded?: boolean;
 }
 
+function isDir(entry: FileEntry | TreeNode): boolean {
+  return entry.type === "directory";
+}
+
 export function FileBrowser() {
-  const [rootPath, setRootPath] = useState("/");
-  const [pathParts, setPathParts] = useState<string[]>(["/"]);
+  const [rootPath, setRootPath] = useState(".");
+  const [pathParts, setPathParts] = useState<string[]>(["~"]);
   const [entries, setEntries] = useState<TreeNode[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
@@ -61,7 +66,7 @@ export function FileBrowser() {
       setRootPath(path);
 
       // Build breadcrumb parts
-      const parts = path === "/" ? ["/"] : ["/", ...path.split("/").filter(Boolean)];
+      const parts = path === "." ? ["~"] : ["~", ...path.replace(/^\.\//, "").split("/").filter(Boolean)];
       setPathParts(parts);
 
       setIsLoading(false);
@@ -72,7 +77,7 @@ export function FileBrowser() {
   );
 
   useEffect(() => {
-    loadRoot("/");
+    loadRoot(".");
   }, [loadRoot]);
 
   const toggleDirectory = useCallback(
@@ -93,7 +98,7 @@ export function FileBrowser() {
       };
 
       // If not loaded yet, fetch children
-      if (!node.loaded && node.isDirectory) {
+      if (!node.loaded && isDir(node)) {
         const children = await fetchDirectory(node.path);
         const setChildren = (
           nodes: TreeNode[],
@@ -151,9 +156,9 @@ export function FileBrowser() {
   const navigateBreadcrumb = useCallback(
     (index: number) => {
       if (index === 0) {
-        loadRoot("/");
+        loadRoot(".");
       } else {
-        const path = "/" + pathParts.slice(1, index + 1).join("/");
+        const path = pathParts.slice(1, index + 1).join("/");
         loadRoot(path);
       }
     },
@@ -170,14 +175,14 @@ export function FileBrowser() {
               hover:bg-[#252838] transition-colors text-left"
             style={{ paddingLeft: `${8 + depth * 16}px` }}
             onClick={() => {
-              if (node.isDirectory) {
+              if (isDir(node)) {
                 toggleDirectory(node, currentPath);
               } else {
                 handleFileClick(node);
               }
             }}
           >
-            {node.isDirectory ? (
+            {isDir(node) ? (
               <>
                 {node.expanded ? (
                   <ChevronDown size={12} className="text-[#6B7280] shrink-0" />
@@ -198,7 +203,7 @@ export function FileBrowser() {
             )}
             <span className="truncate text-[#E4E4E7]">{node.name}</span>
           </button>
-          {node.isDirectory &&
+          {isDir(node) &&
             node.expanded &&
             node.children &&
             renderTree(node.children, depth + 1, currentPath)}
@@ -218,7 +223,7 @@ export function FileBrowser() {
               onClick={() => navigateBreadcrumb(i)}
               className="text-[#6B7280] hover:text-[#E4E4E7] transition-colors"
             >
-              {part === "/" ? "~" : part}
+              {part}
             </button>
           </span>
         ))}

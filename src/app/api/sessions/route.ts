@@ -4,10 +4,46 @@ import {
   createSession,
   killSession,
 } from "@/lib/tmux";
+import { getAuthMode } from "@/lib/auth-config";
 
-export async function GET() {
+function getUserScoping(req: NextRequest): {
+  username: string | null;
+  role: string | null;
+  shouldScope: boolean;
+} {
+  const authMode = getAuthMode();
+  if (authMode === "none" || authMode === "password") {
+    return { username: null, role: "admin", shouldScope: false };
+  }
+
+  const username = req.headers.get("x-username");
+  const role = req.headers.get("x-user-role");
+  return {
+    username,
+    role,
+    shouldScope: role === "user",
+  };
+}
+
+function prefixSessionName(name: string, username: string | null): string {
+  if (!username) return name;
+  return `${username}-${name}`;
+}
+
+export async function GET(req: NextRequest) {
   try {
-    const sessions = listSessions();
+    const { username, shouldScope } = getUserScoping(req);
+    let sessions = listSessions();
+
+    if (shouldScope && username) {
+      // Non-admin users only see their own sessions (prefixed with username-)
+      const prefix = `${username}-`;
+      sessions = sessions.filter((s: any) => {
+        const name = typeof s === "string" ? s : s.name;
+        return name.startsWith(prefix);
+      });
+    }
+
     return NextResponse.json({ sessions });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -34,8 +70,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    createSession(name);
-    return NextResponse.json({ success: true, name }, { status: 201 });
+    const { username, shouldScope } = getUserScoping(req);
+    const authMode = getAuthMode();
+
+    // In local/oauth mode, prefix session names with username
+    let finalName = name;
+    if ((authMode === "local" || authMode === "oauth") && username) {
+      finalName = prefixSessionName(name, username);
+    }
+
+    createSession(finalName);
+    return NextResponse.json({ success: true, name: finalName }, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
@@ -52,6 +97,19 @@ export async function DELETE(req: NextRequest) {
         { error: "Missing or invalid session name" },
         { status: 400 }
       );
+    }
+
+    const { username, role, shouldScope } = getUserScoping(req);
+
+    // Non-admin users can only delete their own sessions
+    if (shouldScope && username) {
+      const prefix = `${username}-`;
+      if (!name.startsWith(prefix)) {
+        return NextResponse.json(
+          { error: "Cannot delete another user's session" },
+          { status: 403 }
+        );
+      }
     }
 
     killSession(name);

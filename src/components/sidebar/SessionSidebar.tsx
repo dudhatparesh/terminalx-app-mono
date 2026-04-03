@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Terminal, Plus, RefreshCw } from "lucide-react";
+import { useEffect, useState, useRef } from "react";
+import { Terminal, Plus, RefreshCw, X } from "lucide-react";
 import { useSessions, type TmuxSession } from "@/hooks/useSessions";
+import { UserSection } from "@/components/auth/UserSection";
 
 interface SessionSidebarProps {
   onOpenSession: (sessionName: string) => void;
@@ -15,6 +16,10 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
   const [connectionStatus, setConnectionStatus] = useState<
     "connected" | "reconnecting" | "disconnected"
   >("disconnected");
+  const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
+  const [newSessionName, setNewSessionName] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch server health/hostname
   useEffect(() => {
@@ -50,9 +55,32 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
     disconnected: "#EF4444",
   };
 
+  const handleOpenDialog = () => {
+    setNewSessionName("");
+    setCreateError(null);
+    setShowNewSessionDialog(true);
+    setTimeout(() => nameInputRef.current?.focus(), 50);
+  };
+
   const handleCreate = async () => {
-    const session = await createSession();
+    const name = newSessionName.trim();
+    if (!name) {
+      setCreateError("Session name is required");
+      return;
+    }
+    if (!/^[a-zA-Z0-9_.\-]+$/.test(name)) {
+      setCreateError("Only letters, numbers, _ - . allowed");
+      return;
+    }
+    if (sessions.some((s) => s.name === name)) {
+      setCreateError("Session name already exists");
+      return;
+    }
+    setCreateError(null);
+    const session = await createSession(name);
     if (session) {
+      setShowNewSessionDialog(false);
+      setNewSessionName("");
       onOpenSession(session.name);
     }
   };
@@ -139,17 +167,67 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
         )}
       </div>
 
+      {/* User section */}
+      <UserSection />
+
+      {/* New session dialog */}
+      {showNewSessionDialog && (
+        <div className="px-3 py-3 border-t border-[#2A2D3A] bg-[#1C1F2B]">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] text-[#6B7280] uppercase tracking-wider font-medium">
+              New Session
+            </span>
+            <button
+              onClick={() => setShowNewSessionDialog(false)}
+              className="p-0.5 text-[#6B7280] hover:text-[#E4E4E7] transition-colors"
+            >
+              <X size={12} />
+            </button>
+          </div>
+          <input
+            ref={nameInputRef}
+            type="text"
+            value={newSessionName}
+            onChange={(e) => {
+              setNewSessionName(e.target.value);
+              setCreateError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleCreate();
+              if (e.key === "Escape") setShowNewSessionDialog(false);
+            }}
+            placeholder="e.g. my-project"
+            className="w-full px-2 py-1.5 rounded bg-[#0D0F12] border border-[#2A2D3A]
+              text-[#E4E4E7] text-[13px] placeholder:text-[#6B7280]/50
+              focus:outline-none focus:border-[#3B82F6] transition-colors"
+          />
+          {createError && (
+            <p className="text-[11px] text-[#EF4444] mt-1">{createError}</p>
+          )}
+          <button
+            onClick={handleCreate}
+            className="w-full mt-2 flex items-center justify-center gap-1.5 px-3 py-1.5
+              rounded bg-[#3B82F6] text-white text-[13px] font-medium
+              hover:bg-[#2563EB] transition-colors"
+          >
+            Create
+          </button>
+        </div>
+      )}
+
       {/* New session button */}
-      <div className="p-2 border-t border-[#2A2D3A]">
-        <button
-          onClick={handleCreate}
-          className="w-full flex items-center justify-center gap-1.5 px-3 py-2
-            rounded bg-[#1C1F2B] text-[#E4E4E7] hover:bg-[#252838] transition-colors"
-        >
-          <Plus size={14} />
-          New Session
-        </button>
-      </div>
+      {!showNewSessionDialog && (
+        <div className="p-2 border-t border-[#2A2D3A]">
+          <button
+            onClick={handleOpenDialog}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2
+              rounded bg-[#1C1F2B] text-[#E4E4E7] hover:bg-[#252838] transition-colors"
+          >
+            <Plus size={14} />
+            New Session
+          </button>
+        </div>
+      )}
     </div>
   );
 }
