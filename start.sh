@@ -71,11 +71,9 @@ export TERMINUS_LOG_PATHS
 export TERMINALX_AUTH_MODE="$AUTH_MODE"
 export NODE_ENV=production
 
-# ── Build if needed ─────────────────────────────────────────────────────────
-if [ ! -d ".next" ] || [ "$1" = "--build" ]; then
-  echo "Building TerminalX..."
-  npm run build
-fi
+# ── Build (always rebuild — auth config is baked at build time) ─────────────
+echo "Building TerminalX..."
+npm run build
 
 # ── Print config ────────────────────────────────────────────────────────────
 echo ""
