@@ -55,12 +55,24 @@ export function TerminalView({
     };
 
     ws.onmessage = (event) => {
-      if (terminalRef.current) {
-        if (event.data instanceof ArrayBuffer) {
-          terminalRef.current.write(new Uint8Array(event.data));
-        } else {
-          terminalRef.current.write(event.data);
+      if (!terminalRef.current) return;
+
+      if (event.data instanceof ArrayBuffer) {
+        terminalRef.current.write(new Uint8Array(event.data));
+      } else {
+        // Filter out JSON control messages from the server
+        const data = event.data as string;
+        if (data.startsWith("{")) {
+          try {
+            const msg = JSON.parse(data);
+            if (msg.type === "pty-id" || msg.type === "event") {
+              return; // Skip control messages
+            }
+          } catch {
+            // Not JSON, write to terminal
+          }
         }
+        terminalRef.current.write(data);
       }
     };
 
