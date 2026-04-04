@@ -5,7 +5,7 @@ import { Terminal } from "xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
-import { Upload } from "lucide-react";
+import { Upload, Copy, Check } from "lucide-react";
 import "xterm/css/xterm.css";
 
 interface TerminalViewProps {
@@ -29,6 +29,11 @@ export function TerminalView({
   const intentionalCloseRef = useRef(false);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [hasSelection, setHasSelection] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [ctrlActive, setCtrlActive] = useState(false);
+  const [altActive, setAltActive] = useState(false);
   const dragCounterRef = useRef(0);
 
   const connectWs = useCallback(() => {
@@ -210,6 +215,73 @@ export function TerminalView({
     };
   }, [connectWs]);
 
+  // Detect mobile
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768 || "ontouchstart" in window);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  // Track text selection in terminal
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+    const disposable = term.onSelectionChange(() => {
+      const sel = term.getSelection();
+      setHasSelection(sel.length > 0);
+      setCopied(false);
+    });
+    return () => disposable.dispose();
+  }, []);
+
+  const handleCopy = useCallback(async () => {
+    const term = terminalRef.current;
+    if (!term) return;
+    const sel = term.getSelection();
+    if (!sel) return;
+    try {
+      await navigator.clipboard.writeText(sel);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Fallback for older browsers
+      const textarea = document.createElement("textarea");
+      textarea.value = sel;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  }, []);
+
+  const sendKey = useCallback(
+    (key: string) => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+      let data = key;
+
+      // Apply modifiers
+      if (ctrlActive && key.length === 1) {
+        // Ctrl+letter = char code 1-26
+        const code = key.toLowerCase().charCodeAt(0) - 96;
+        if (code >= 1 && code <= 26) {
+          data = String.fromCharCode(code);
+        }
+        setCtrlActive(false);
+      } else if (altActive && key.length === 1) {
+        data = "\x1b" + key;
+        setAltActive(false);
+      }
+
+      wsRef.current.send(data);
+      terminalRef.current?.focus();
+    },
+    [ctrlActive, altActive]
+  );
+
   const uploadFile = useCallback(async (file: File) => {
     setUploadStatus(`Uploading ${file.name}...`);
     try {
@@ -303,9 +375,106 @@ export function TerminalView({
         </div>
       )}
 
+      {/* Copy button — appears when text is selected */}
+      {hasSelection && (
+        <button
+          onClick={handleCopy}
+          className="absolute top-2 right-2 flex items-center gap-1.5 px-2.5 py-1.5
+            rounded bg-[#1C1F2B] border border-[#2A2D3A] text-[12px] text-[#E4E4E7]
+            hover:bg-[#252838] transition-colors shadow-lg z-50 cursor-pointer"
+        >
+          {copied ? (
+            <>
+              <Check size={14} className="text-[#22C55E]" />
+              Copied
+            </>
+          ) : (
+            <>
+              <Copy size={14} />
+              Copy
+            </>
+          )}
+        </button>
+      )}
+
+      {/* Mobile special keys toolbar */}
+      {isMobile && (
+        <div className="absolute bottom-0 left-0 right-0 flex items-center gap-1
+          px-2 py-1.5 bg-[#151820] border-t border-[#2A2D3A] z-40 overflow-x-auto">
+          {/* Modifier keys (toggle) */}
+          <button
+            onClick={() => setCtrlActive(!ctrlActive)}
+            className={`shrink-0 px-2.5 py-1 rounded text-[11px] font-mono font-medium transition-colors
+              ${ctrlActive
+                ? "bg-[#3B82F6] text-white"
+                : "bg-[#1C1F2B] text-[#E4E4E7] border border-[#2A2D3A]"
+              }`}
+          >
+            Ctrl
+          </button>
+          <button
+            onClick={() => setAltActive(!altActive)}
+            className={`shrink-0 px-2.5 py-1 rounded text-[11px] font-mono font-medium transition-colors
+              ${altActive
+                ? "bg-[#3B82F6] text-white"
+                : "bg-[#1C1F2B] text-[#E4E4E7] border border-[#2A2D3A]"
+              }`}
+          >
+            Alt
+          </button>
+
+          <div className="w-px h-5 bg-[#2A2D3A] shrink-0" />
+
+          {/* Common keys */}
+          {[
+            { label: "Esc", key: "\x1b" },
+            { label: "Tab", key: "\t" },
+            { label: "↑", key: "\x1b[A" },
+            { label: "↓", key: "\x1b[B" },
+            { label: "←", key: "\x1b[D" },
+            { label: "→", key: "\x1b[C" },
+          ].map(({ label, key }) => (
+            <button
+              key={label}
+              onClick={() => sendKey(key)}
+              className="shrink-0 px-2.5 py-1 rounded bg-[#1C1F2B] text-[#E4E4E7]
+                border border-[#2A2D3A] text-[11px] font-mono font-medium
+                active:bg-[#252838] transition-colors"
+            >
+              {label}
+            </button>
+          ))}
+
+          <div className="w-px h-5 bg-[#2A2D3A] shrink-0" />
+
+          {/* Ctrl combos */}
+          {[
+            { label: "^C", key: "\x03" },
+            { label: "^D", key: "\x04" },
+            { label: "^Z", key: "\x1a" },
+            { label: "^L", key: "\x0c" },
+            { label: "^A", key: "\x01" },
+            { label: "^E", key: "\x05" },
+          ].map(({ label, key }) => (
+            <button
+              key={label}
+              onClick={() => {
+                wsRef.current?.send(key);
+                terminalRef.current?.focus();
+              }}
+              className="shrink-0 px-2.5 py-1 rounded bg-[#1C1F2B] text-[#E4E4E7]
+                border border-[#2A2D3A] text-[11px] font-mono font-medium
+                active:bg-[#252838] transition-colors"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Upload status toast */}
       {uploadStatus && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded bg-[#1C1F2B] border border-[#2A2D3A] text-[12px] text-[#E4E4E7] shadow-lg z-50">
+        <div className={`absolute ${isMobile ? "bottom-12" : "bottom-4"} left-1/2 -translate-x-1/2 px-3 py-1.5 rounded bg-[#1C1F2B] border border-[#2A2D3A] text-[12px] text-[#E4E4E7] shadow-lg z-50`}>
           {uploadStatus}
         </div>
       )}
