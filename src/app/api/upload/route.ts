@@ -2,12 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { getUserScoping } from "@/lib/session-scope";
+import { audit } from "@/lib/audit-log";
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
-function getUploadDir(): string {
+function getUploadDir(username: string | null): string {
   const root = process.env.TERMINUS_ROOT || process.env.HOME || "/";
-  const uploadDir = path.join(root, "uploads");
+  // Per-user upload directories in multi-user mode
+  const uploadDir = username
+    ? path.join(root, "uploads", username)
+    : path.join(root, "uploads");
   if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true, mode: 0o755 });
   }
@@ -19,6 +24,14 @@ export async function POST(req: NextRequest) {
   if (readOnly) {
     return NextResponse.json(
       { error: "Uploads disabled in read-only mode" },
+      { status: 403 }
+    );
+  }
+
+  // CSRF protection: require custom header that CORS preflight would block
+  if (!req.headers.get("x-requested-with")) {
+    return NextResponse.json(
+      { error: "Missing required header" },
       { status: 403 }
     );
   }
@@ -58,12 +71,18 @@ export async function POST(req: NextRequest) {
     const uniqueSuffix = crypto.randomBytes(4).toString("hex");
     const safeFilename = `${baseName}-${uniqueSuffix}${ext}`;
 
-    const uploadDir = getUploadDir();
+    const { username } = getUserScoping(req.headers);
+    const uploadDir = getUploadDir(username);
     const filePath = path.join(uploadDir, safeFilename);
 
     // Write file
     const arrayBuffer = await file.arrayBuffer();
     fs.writeFileSync(filePath, Buffer.from(arrayBuffer));
+
+    audit("file_uploaded", {
+      username: username || undefined,
+      detail: `${safeFilename} (${file.size} bytes)`,
+    });
 
     return NextResponse.json({
       success: true,
@@ -71,8 +90,7 @@ export async function POST(req: NextRequest) {
       path: filePath,
       size: file.size,
     });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "Upload failed" }, { status: 500 });
   }
 }

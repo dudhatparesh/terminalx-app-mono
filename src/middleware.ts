@@ -10,9 +10,9 @@ function getJwtSecretEdge(): Uint8Array | null {
   return new TextEncoder().encode(secret);
 }
 
-function getAuthModeEdge(): "none" | "password" | "local" | "oauth" {
+function getAuthModeEdge(): "none" | "password" | "local" {
   const mode = process.env.TERMINALX_AUTH_MODE || "none";
-  if (mode === "password" || mode === "local" || mode === "oauth") {
+  if (mode === "password" || mode === "local") {
     return mode;
   }
   return "none";

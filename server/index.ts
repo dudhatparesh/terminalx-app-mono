@@ -2,9 +2,11 @@ import { createServer, IncomingMessage } from "http";
 import { parse as parseUrl } from "url";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
-import { watch } from "chokidar";
+import { watch, FSWatcher } from "chokidar";
 import * as path from "path";
 import type { Socket } from "net";
+import { audit } from "../src/lib/audit-log";
+import { canAccessSession } from "../src/lib/session-scope";
 
 // Import server-side modules
 import {
@@ -59,6 +61,7 @@ async function authenticateWebSocket(
   const token = cookies["terminalx-session"];
 
   if (!token) {
+    audit("ws_auth_failed", { detail: "missing cookie" });
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
     socket.destroy();
     return false;
@@ -66,6 +69,7 @@ async function authenticateWebSocket(
 
   const payload = await verifyJwt(token);
   if (!payload) {
+    audit("ws_auth_failed", { detail: "invalid token" });
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
     socket.destroy();
     return false;
@@ -84,9 +88,9 @@ const handle = app.getRequestHandler();
 
 // ── WebSocket Servers (noServer mode) ───────────────────────────────────────
 
-const terminalWss = new WebSocketServer({ noServer: true });
-const logsWss = new WebSocketServer({ noServer: true });
-const filesWss = new WebSocketServer({ noServer: true });
+const terminalWss = new WebSocketServer({ noServer: true, maxPayload: 1 * 1024 * 1024 }); // 1MB
+const logsWss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 }); // 64KB
+const filesWss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 }); // 64KB
 
 // ── Terminal WebSocket Handler ──────────────────────────────────────────────
 
@@ -103,12 +107,15 @@ terminalWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
 
   // Per-user scoping: non-admin users can only access their own sessions
   const user = (req as any).user;
-  if (user && (AUTH_MODE === "local" || AUTH_MODE === "oauth") && user.role === "user") {
-    if (!sessionId.startsWith(`${user.username}-`)) {
-      ws.close(1008, "Access denied");
-      return;
-    }
+  if (user && !canAccessSession(user.username, user.role, sessionId)) {
+    ws.close(1008, "Access denied");
+    return;
   }
+
+  audit("terminal_connected", {
+    username: user?.username,
+    detail: sessionId,
+  });
 
   if (TERMINUS_READ_ONLY) {
     ws.close(1008, "Read-only mode: terminal access disabled");
@@ -162,6 +169,10 @@ terminalWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   ws.on("close", () => {
     dataHandler.dispose();
     destroyPty(ptyInstance.id);
+    audit("terminal_disconnected", {
+      username: user?.username,
+      detail: sessionId,
+    });
   });
 
   ws.on("error", () => {
@@ -229,10 +240,15 @@ logsWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   });
 });
 
-// ── File Watcher WebSocket Handler ──────────────────────────────────────────
+// ── File Watcher (singleton — shared across all WebSocket clients) ──────────
 
-filesWss.on("connection", (ws: WebSocket) => {
-  const watcher = watch(TERMINUS_ROOT, {
+const fileWatcherClients = new Set<WebSocket>();
+let sharedWatcher: FSWatcher | null = null;
+
+function ensureFileWatcher(): void {
+  if (sharedWatcher) return;
+
+  sharedWatcher = watch(TERMINUS_ROOT, {
     ignored: [
       /(^|[\/\\])\../,          // dotfiles
       "**/node_modules/**",
@@ -240,6 +256,9 @@ filesWss.on("connection", (ws: WebSocket) => {
       "**/.next/**",
       "**/dist/**",
       "**/build/**",
+      "**/.ssh/**",
+      "**/.gnupg/**",
+      "**/.config/secrets/**",
     ],
     persistent: true,
     ignoreInitial: true,
@@ -250,33 +269,43 @@ filesWss.on("connection", (ws: WebSocket) => {
     },
   });
 
-  const sendEvent = (event: string, filePath: string) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      // Send path relative to TERMINUS_ROOT
-      const relativePath = path.relative(TERMINUS_ROOT, filePath);
-      ws.send(
-        JSON.stringify({
-          type: "file-event",
-          event,
-          path: relativePath,
-          timestamp: Date.now(),
-        })
-      );
+  const broadcast = (event: string, filePath: string) => {
+    const relativePath = path.relative(TERMINUS_ROOT, filePath);
+    const msg = JSON.stringify({
+      type: "file-event",
+      event,
+      path: relativePath,
+      timestamp: Date.now(),
+    });
+    for (const client of fileWatcherClients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(msg);
+      }
     }
   };
 
-  watcher.on("add", (p: string) => sendEvent("add", p));
-  watcher.on("change", (p: string) => sendEvent("change", p));
-  watcher.on("unlink", (p: string) => sendEvent("unlink", p));
-  watcher.on("addDir", (p: string) => sendEvent("addDir", p));
-  watcher.on("unlinkDir", (p: string) => sendEvent("unlinkDir", p));
+  sharedWatcher.on("add", (p: string) => broadcast("add", p));
+  sharedWatcher.on("change", (p: string) => broadcast("change", p));
+  sharedWatcher.on("unlink", (p: string) => broadcast("unlink", p));
+  sharedWatcher.on("addDir", (p: string) => broadcast("addDir", p));
+  sharedWatcher.on("unlinkDir", (p: string) => broadcast("unlinkDir", p));
+}
+
+filesWss.on("connection", (ws: WebSocket) => {
+  ensureFileWatcher();
+  fileWatcherClients.add(ws);
 
   ws.on("close", () => {
-    watcher.close();
+    fileWatcherClients.delete(ws);
+    // Close shared watcher when no clients remain
+    if (fileWatcherClients.size === 0 && sharedWatcher) {
+      sharedWatcher.close();
+      sharedWatcher = null;
+    }
   });
 
   ws.on("error", () => {
-    watcher.close();
+    fileWatcherClients.delete(ws);
   });
 });
 
@@ -309,6 +338,28 @@ app.prepare().then(() => {
       pathname === "/ws/files";
 
     if (isOurWs) {
+      // Validate Origin header to prevent Cross-Site WebSocket Hijacking (CSWSH).
+      // Browsers send cookies on cross-origin WS requests, so without this check
+      // a malicious page could connect to the terminal using the victim's session.
+      const origin = req.headers.origin;
+      if (origin) {
+        try {
+          const originHost = new URL(origin).host;
+          const serverHost = req.headers.host;
+          if (serverHost && originHost !== serverHost) {
+            audit("ws_origin_rejected", { detail: `origin=${origin} host=${serverHost}` });
+            socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+        } catch {
+          audit("ws_origin_rejected", { detail: `malformed origin=${origin}` });
+          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+      }
+
       const authed = await authenticateWebSocket(req, socket);
       if (!authed) return;
     }
@@ -357,6 +408,10 @@ app.prepare().then(() => {
     console.log("\nShutting down...");
     destroyAllPtys();
     destroyAllLogStreams();
+    if (sharedWatcher) {
+      sharedWatcher.close();
+      sharedWatcher = null;
+    }
     terminalWss.close();
     logsWss.close();
     filesWss.close();

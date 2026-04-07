@@ -45,13 +45,19 @@ export async function GET(req: NextRequest) {
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const status = message.includes("outside the allowed root")
-      ? 403
-      : message.includes("ENOENT")
-        ? 404
-        : message.includes("File too large")
-          ? 413
-          : 500;
-    return NextResponse.json({ error: message }, { status });
+    // Sanitize error messages to avoid leaking internal filesystem paths
+    if (message.includes("outside the allowed root")) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+    if (message.includes("ENOENT") || message.includes("no such file")) {
+      return NextResponse.json({ error: "File not found" }, { status: 404 });
+    }
+    if (message.includes("File too large")) {
+      return NextResponse.json({ error: "File too large" }, { status: 413 });
+    }
+    if (message.includes("not a directory") || message.includes("not a file")) {
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

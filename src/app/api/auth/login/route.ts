@@ -3,35 +3,46 @@ import crypto from "crypto";
 import { signJwt, comparePassword } from "@/lib/auth";
 import { getAuthMode, getSinglePassword } from "@/lib/auth-config";
 import { getUserByUsername, updateLastLogin, ensureDefaultAdmin } from "@/lib/users";
+import { audit } from "@/lib/audit-log";
 
-// ── Rate Limiting (in-memory sliding window) ────────────────────────────────
+// ── Rate Limiting (per-username, bounded sliding window) ─────────────────────
 
 const rateLimitMap = new Map<string, number[]>();
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 5;
+const RATE_LIMIT_MAX_KEYS = 10_000; // Bound memory: max tracked usernames
 
-function isRateLimited(ip: string): boolean {
+function isRateLimited(key: string): boolean {
   const now = Date.now();
-  const attempts = rateLimitMap.get(ip) || [];
-  // Remove expired entries
+  const attempts = rateLimitMap.get(key) || [];
   const recent = attempts.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
-  rateLimitMap.set(ip, recent);
+
   if (recent.length >= RATE_LIMIT_MAX) {
+    rateLimitMap.set(key, recent);
     return true;
   }
+
+  // Bound the map size to prevent memory exhaustion from many unique keys
+  if (!rateLimitMap.has(key) && rateLimitMap.size >= RATE_LIMIT_MAX_KEYS) {
+    // Evict oldest entry
+    const oldestKey = rateLimitMap.keys().next().value;
+    if (oldestKey !== undefined) rateLimitMap.delete(oldestKey);
+  }
+
   recent.push(now);
+  rateLimitMap.set(key, recent);
   return false;
 }
 
 // Clean up stale entries every 5 minutes
 setInterval(() => {
   const now = Date.now();
-  for (const [ip, attempts] of rateLimitMap) {
+  for (const [key, attempts] of rateLimitMap) {
     const recent = attempts.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
     if (recent.length === 0) {
-      rateLimitMap.delete(ip);
+      rateLimitMap.delete(key);
     } else {
-      rateLimitMap.set(ip, recent);
+      rateLimitMap.set(key, recent);
     }
   }
 }, 300_000);
@@ -46,7 +57,7 @@ function makeSessionCookie(token: string, req: NextRequest): string {
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
-    `Max-Age=${7 * 24 * 60 * 60}`,
+    `Max-Age=${24 * 60 * 60}`,
   ];
   if (secure) parts.push("Secure");
   return parts.join("; ");
@@ -55,18 +66,6 @@ function makeSessionCookie(token: string, req: NextRequest): string {
 // ── POST /api/auth/login ────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
-  // Use a fixed global key for rate limiting to prevent IP spoofing via
-  // x-forwarded-for. All login attempts share the same 5/min limit.
-  // For a self-hosted app this is safer than trusting proxy headers.
-  const rateLimitKey = "global";
-
-  if (isRateLimited(rateLimitKey)) {
-    return NextResponse.json(
-      { error: "Too many login attempts. Try again later." },
-      { status: 429 }
-    );
-  }
-
   const authMode = getAuthMode();
 
   if (authMode === "none") {
@@ -91,6 +90,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Rate limit per username to prevent brute force without locking out all users.
+  // For password mode (no username), rate limit per the literal key "password-mode".
+  const rateLimitKey = body.username || "password-mode";
+  if (isRateLimited(rateLimitKey)) {
+    audit("rate_limited", { username: body.username, detail: "login" });
+    return NextResponse.json(
+      { error: "Too many login attempts. Try again later." },
+      { status: 429 }
+    );
+  }
+
   // ── Password mode: single shared password ──
   if (authMode === "password") {
     const expected = getSinglePassword();
@@ -104,6 +114,7 @@ export async function POST(req: NextRequest) {
     const a = Buffer.from(password);
     const b = Buffer.from(expected);
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      audit("login_failed", { detail: "password mode: invalid password" });
       return NextResponse.json(
         { error: "Invalid password" },
         { status: 401 }
@@ -116,6 +127,7 @@ export async function POST(req: NextRequest) {
       role: "admin",
     });
 
+    audit("login_success", { username: "admin", detail: "password mode" });
     const res = NextResponse.json({ success: true, username: "admin" });
     res.headers.set("Set-Cookie", makeSessionCookie(token, req));
     return res;
@@ -136,6 +148,7 @@ export async function POST(req: NextRequest) {
 
     const user = getUserByUsername(username);
     if (!user) {
+      audit("login_failed", { username, detail: "unknown user" });
       return NextResponse.json(
         { error: "Invalid credentials" },
         { status: 401 }
@@ -144,6 +157,7 @@ export async function POST(req: NextRequest) {
 
     const valid = await comparePassword(password, user.passwordHash);
     if (!valid) {
+      audit("login_failed", { username, detail: "wrong password" });
       return NextResponse.json(
         { error: "Invalid credentials" },
         { status: 401 }
@@ -158,6 +172,7 @@ export async function POST(req: NextRequest) {
       role: user.role,
     });
 
+    audit("login_success", { username: user.username, userId: user.id });
     const res = NextResponse.json({
       success: true,
       username: user.username,

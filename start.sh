@@ -8,14 +8,14 @@ set -e
 cd "$(dirname "$0")"
 
 # ── Defaults ────────────────────────────────────────────────────────────────
-PORT="${PORT:-3456}"
+PORT="${PORT:-3000}"
 TERMINUS_HOST="${TERMINUS_HOST:-0.0.0.0}"
 TERMINUS_ROOT="${TERMINUS_ROOT:-$HOME}"
 TERMINUS_SHELL="${TERMINUS_SHELL:-$SHELL}"
 TERMINUS_MAX_SESSIONS="${TERMINUS_MAX_SESSIONS:-20}"
 TERMINUS_READ_ONLY="${TERMINUS_READ_ONLY:-false}"
 TERMINUS_LOG_PATHS="${TERMINUS_LOG_PATHS:-/var/log,~/.pm2/logs}"
-TERMINALX_ADMIN_PASSWORD="REDACTED"
+
 # ── Auth Mode ───────────────────────────────────────────────────────────────
 AUTH_MODE="${TERMINALX_AUTH_MODE:-local}"
 

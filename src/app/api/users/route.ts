@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUsers, createUser, deleteUser, updateUserRole, getUserById } from "@/lib/users";
 import { getAuthMode } from "@/lib/auth-config";
+import { audit } from "@/lib/audit-log";
 
 function isAdmin(req: NextRequest): boolean {
   return req.headers.get("x-user-role") === "admin";
@@ -74,6 +75,10 @@ export async function POST(req: NextRequest) {
 
   try {
     const user = await createUser(username, password, role || "user");
+    audit("user_created", {
+      username: req.headers.get("x-username") || undefined,
+      detail: `created user: ${username} (${role || "user"})`,
+    });
     return NextResponse.json({ user }, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -120,6 +125,10 @@ export async function DELETE(req: NextRequest) {
 
   try {
     await deleteUser(id);
+    audit("user_deleted", {
+      username: req.headers.get("x-username") || undefined,
+      detail: `deleted user id: ${id}`,
+    });
     return NextResponse.json({ success: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

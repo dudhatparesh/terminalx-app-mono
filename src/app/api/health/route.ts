@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
-import { getActivePtyCount } from "@/lib/pty-manager";
 
+// Public health check — minimal info only. No uptime, no active session counts,
+// no timestamps (useful for timing attacks against JWT).
 export async function GET() {
-  return NextResponse.json({
-    status: "ok",
-    uptime: process.uptime(),
-    activePtys: getActivePtyCount(),
-    timestamp: new Date().toISOString(),
-  });
+  return NextResponse.json({ status: "ok" });
 }

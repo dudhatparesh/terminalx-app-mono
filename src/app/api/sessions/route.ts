@@ -4,54 +4,32 @@ import {
   createSession,
   killSession,
 } from "@/lib/tmux";
-import { getAuthMode } from "@/lib/auth-config";
-
-function getUserScoping(req: NextRequest): {
-  username: string | null;
-  role: string | null;
-  shouldScope: boolean;
-} {
-  const authMode = getAuthMode();
-  if (authMode === "none" || authMode === "password") {
-    return { username: null, role: "admin", shouldScope: false };
-  }
-
-  const username = req.headers.get("x-username");
-  const role = req.headers.get("x-user-role");
-  return {
-    username,
-    role,
-    shouldScope: role === "user",
-  };
-}
-
-function prefixSessionName(name: string, username: string | null): string {
-  if (!username) return name;
-  return `${username}-${name}`;
-}
+import { getUserScoping, canAccessSession, scopedSessionName } from "@/lib/session-scope";
+import { audit } from "@/lib/audit-log";
 
 export async function GET(req: NextRequest) {
   try {
-    const { username, shouldScope } = getUserScoping(req);
+    const { username, shouldScope } = getUserScoping(req.headers);
     let sessions = listSessions();
 
     if (shouldScope && username) {
-      // Non-admin users only see their own sessions (prefixed with username-)
-      const prefix = `${username}-`;
-      sessions = sessions.filter((s: any) => {
-        const name = typeof s === "string" ? s : s.name;
-        return name.startsWith(prefix);
-      });
+      sessions = sessions.filter((s) => canAccessSession(username, "user", s.name));
     }
 
     return NextResponse.json({ sessions });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "Failed to list sessions" }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
+  if (process.env.TERMINUS_READ_ONLY === "true") {
+    return NextResponse.json(
+      { error: "Session creation disabled in read-only mode" },
+      { status: 403 }
+    );
+  }
+
   try {
     const body = await req.json();
     const { name } = body;
@@ -70,24 +48,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { username, shouldScope } = getUserScoping(req);
-    const authMode = getAuthMode();
-
-    // In local/oauth mode, prefix session names with username
-    let finalName = name;
-    if ((authMode === "local" || authMode === "oauth") && username) {
-      finalName = prefixSessionName(name, username);
-    }
+    const { username } = getUserScoping(req.headers);
+    const finalName = scopedSessionName(name, username);
 
     createSession(finalName);
+    audit("session_created", { username: username || undefined, detail: finalName });
     return NextResponse.json({ success: true, name: finalName }, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
   }
 }
 
 export async function DELETE(req: NextRequest) {
+  if (process.env.TERMINUS_READ_ONLY === "true") {
+    return NextResponse.json(
+      { error: "Session deletion disabled in read-only mode" },
+      { status: 403 }
+    );
+  }
+
   try {
     const body = await req.json();
     const { name } = body;
@@ -99,23 +78,19 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    const { username, role, shouldScope } = getUserScoping(req);
+    const { username, role, shouldScope } = getUserScoping(req.headers);
 
-    // Non-admin users can only delete their own sessions
-    if (shouldScope && username) {
-      const prefix = `${username}-`;
-      if (!name.startsWith(prefix)) {
-        return NextResponse.json(
-          { error: "Cannot delete another user's session" },
-          { status: 403 }
-        );
-      }
+    if (shouldScope && username && !canAccessSession(username, role, name)) {
+      return NextResponse.json(
+        { error: "Cannot delete another user's session" },
+        { status: 403 }
+      );
     }
 
     killSession(name);
+    audit("session_deleted", { username: username || undefined, detail: name });
     return NextResponse.json({ success: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: "Failed to delete session" }, { status: 500 });
   }
 }

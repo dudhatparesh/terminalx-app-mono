@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+.gitignore
+.DS_Store
+*.md
+!README.md
+data/
+.terminalx-secret
+.env*
+.claude/
+.gstack/

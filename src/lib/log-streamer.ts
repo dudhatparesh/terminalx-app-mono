@@ -64,8 +64,16 @@ function validateLogPath(filePath: string): string {
   }
 }
 
+const ALLOWED_LOG_EXTENSIONS = [".log", ".out", ".err"];
+
 export function createLogStream(filePath: string): LogStream {
   const safePath = validateLogPath(filePath);
+
+  // Validate file extension to prevent tailing arbitrary files (e.g. binary /var/log/wtmp)
+  const ext = path.extname(safePath).toLowerCase();
+  if (!ALLOWED_LOG_EXTENSIONS.includes(ext)) {
+    throw new Error("Only .log, .out, and .err files can be streamed");
+  }
 
   if (!fs.existsSync(safePath)) {
     throw new Error("Log file does not exist");

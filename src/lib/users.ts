@@ -47,6 +47,17 @@ function atomicWriteUsers(users: User[]): void {
   const tmpFile = USERS_FILE + ".tmp";
   fs.writeFileSync(tmpFile, JSON.stringify(users, null, 2), { encoding: "utf-8", mode: 0o600 });
   fs.renameSync(tmpFile, USERS_FILE);
+  invalidateCache();
+}
+
+// ── User Cache (mtime-based to avoid disk reads on every auth check) ────────
+
+let cachedUsers: User[] | null = null;
+let cachedMtime: number = 0;
+
+function invalidateCache(): void {
+  cachedUsers = null;
+  cachedMtime = 0;
 }
 
 // ── CRUD ────────────────────────────────────────────────────────────────────
@@ -54,11 +65,19 @@ function atomicWriteUsers(users: User[]): void {
 export function getUsers(): User[] {
   ensureDataDir();
   if (!fs.existsSync(USERS_FILE)) {
+    cachedUsers = [];
     return [];
   }
   try {
+    const stat = fs.statSync(USERS_FILE);
+    const mtime = stat.mtimeMs;
+    if (cachedUsers && mtime === cachedMtime) {
+      return cachedUsers;
+    }
     const raw = fs.readFileSync(USERS_FILE, "utf-8");
-    return JSON.parse(raw) as User[];
+    cachedUsers = JSON.parse(raw) as User[];
+    cachedMtime = mtime;
+    return cachedUsers;
   } catch {
     return [];
   }

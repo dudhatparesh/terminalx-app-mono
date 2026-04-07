@@ -48,17 +48,32 @@ export function createPty(
 
   const id = `pty-${sessionName}-${Date.now()}`;
 
+  // Build a sanitized environment for PTY processes.
+  // NEVER spread process.env — it contains server secrets (JWT secret, admin password, etc.)
+  const safeEnvKeys = [
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE",
+    "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE", "LC_NUMERIC",
+    "LC_TIME", "LC_MONETARY", "TZ", "EDITOR", "VISUAL", "PAGER",
+    "LESS", "LESSOPEN", "LESSCLOSE", "COLORTERM", "DISPLAY",
+    "SSH_AUTH_SOCK", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
+    "TERMINUS_ROOT",
+  ];
+  const safeEnv: Record<string, string> = {};
+  for (const key of safeEnvKeys) {
+    if (process.env[key]) {
+      safeEnv[key] = process.env[key] as string;
+    }
+  }
+  safeEnv.TERM = "xterm-256color";
+  safeEnv.SHELL = shell;
+
   // Spawn node-pty that attaches to the tmux session
   const proc = pty.spawn("tmux", ["attach-session", "-t", sessionName], {
     name: "xterm-256color",
     cols: Math.max(1, Math.min(cols, 500)),
     rows: Math.max(1, Math.min(rows, 200)),
     cwd: process.env.TERMINUS_ROOT || process.env.HOME || "/",
-    env: {
-      ...process.env,
-      TERM: "xterm-256color",
-      SHELL: shell,
-    } as Record<string, string>,
+    env: safeEnv,
   });
 
   const instance: PtyInstance = {
