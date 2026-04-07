@@ -28,7 +28,6 @@ function isDir(entry: FileEntry | TreeNode): boolean {
 }
 
 export function FileBrowser() {
-  const [rootPath, setRootPath] = useState(".");
   const [pathParts, setPathParts] = useState<string[]>(["~"]);
   const [entries, setEntries] = useState<TreeNode[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -63,8 +62,6 @@ export function FileBrowser() {
           children: [],
         }))
       );
-      setRootPath(path);
-
       // Build breadcrumb parts
       const parts = path === "." ? ["~"] : ["~", ...path.replace(/^\.\//, "").split("/").filter(Boolean)];
       setPathParts(parts);

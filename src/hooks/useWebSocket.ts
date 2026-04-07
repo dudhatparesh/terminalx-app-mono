@@ -57,6 +57,7 @@ export function useWebSocket(
   const onOpenRef = useRef(onOpen);
   const onCloseRef = useRef(onClose);
   const onErrorRef = useRef(onError);
+  const connectRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     onMessageRef.current = onMessage;
@@ -112,11 +113,15 @@ export function useWebSocket(
         reconnectAttemptRef.current = attempt + 1;
 
         reconnectTimerRef.current = setTimeout(() => {
-          connect();
+          connectRef.current?.();
         }, delay);
       }
     };
   }, [url, reconnect, maxReconnectDelay, binaryType]);
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   const disconnect = useCallback(() => {
     intentionalCloseRef.current = true;

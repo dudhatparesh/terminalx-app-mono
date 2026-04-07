@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUsers, createUser, deleteUser, updateUserRole, getUserById } from "@/lib/users";
+import { getUsers, createUser, deleteUser, getUserById } from "@/lib/users";
 import { getAuthMode } from "@/lib/auth-config";
 import { audit } from "@/lib/audit-log";
 
@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
-  const users = getUsers().map(({ passwordHash: _, ...u }) => u);
+  const users = getUsers().map(({ passwordHash: _pw, ...u }) => u);
   return NextResponse.json({ users });
 }
 

@@ -7,6 +7,11 @@ import * as path from "path";
 import type { Socket } from "net";
 import { audit } from "../src/lib/audit-log";
 import { canAccessSession } from "../src/lib/session-scope";
+import type { JwtPayload } from "../src/lib/auth";
+
+interface AuthenticatedRequest extends IncomingMessage {
+  user?: JwtPayload;
+}
 
 // Import server-side modules
 import {
@@ -15,7 +20,6 @@ import {
   destroyPty,
   setMaxSessions,
   destroyAllPtys,
-  getActivePtyCount,
 } from "../src/lib/pty-manager";
 import {
   createLogStream,
@@ -76,7 +80,7 @@ async function authenticateWebSocket(
   }
 
   // Attach user info to request
-  (req as any).user = payload;
+  (req as AuthenticatedRequest).user = payload;
   return true;
 }
 
@@ -106,7 +110,7 @@ terminalWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   }
 
   // Per-user scoping: non-admin users can only access their own sessions
-  const user = (req as any).user;
+  const user = (req as AuthenticatedRequest).user;
   if (user && !canAccessSession(user.username, user.role, sessionId)) {
     ws.close(1008, "Access denied");
     return;

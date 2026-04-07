@@ -35,6 +35,7 @@ export function TerminalView({
   const [ctrlActive, setCtrlActive] = useState(false);
   const [altActive, setAltActive] = useState(false);
   const dragCounterRef = useRef(0);
+  const connectWsRef = useRef<(() => void) | null>(null);
 
   const connectWs = useCallback(() => {
     if (!terminalRef.current) return;
@@ -95,7 +96,7 @@ export function TerminalView({
         reconnectAttemptRef.current = attempt + 1;
 
         reconnectTimerRef.current = setTimeout(() => {
-          connectWs();
+          connectWsRef.current?.();
         }, delay);
       }
     };
@@ -104,6 +105,10 @@ export function TerminalView({
       ws.close();
     };
   }, [sessionId, onDisconnect, onReconnect]);
+
+  useEffect(() => {
+    connectWsRef.current = connectWs;
+  }, [connectWs]);
 
   useEffect(() => {
     if (!containerRef.current) return;

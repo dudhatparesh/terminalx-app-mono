@@ -92,7 +92,7 @@ export function getUserById(id: string): User | undefined {
 }
 
 function stripHash(user: User): SafeUser {
-  const { passwordHash: _, ...safe } = user;
+  const { passwordHash: _hash, ...safe } = user;
   return safe;
 }
 

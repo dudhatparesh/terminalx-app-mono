@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
     createSession(finalName);
     audit("session_created", { username: username || undefined, detail: finalName });
     return NextResponse.json({ success: true, name: finalName }, { status: 201 });
-  } catch (err) {
+  } catch {
     return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
   }
 }
@@ -90,7 +90,7 @@ export async function DELETE(req: NextRequest) {
     killSession(name);
     audit("session_deleted", { username: username || undefined, detail: name });
     return NextResponse.json({ success: true });
-  } catch (err) {
+  } catch {
     return NextResponse.json({ error: "Failed to delete session" }, { status: 500 });
   }
 }
