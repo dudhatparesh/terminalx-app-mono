@@ -212,6 +212,22 @@ logsWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   // /ws/logs/:encodedPath
   const encodedPath = pathParts[3];
 
+  // In local multi-user mode, only admins can tail logs (shared host logs
+  // may contain other users' traces / secrets).
+  const user = (req as AuthenticatedRequest).user;
+  if (
+    process.env.TERMINALX_AUTH_MODE === "local" &&
+    user &&
+    user.role !== "admin"
+  ) {
+    audit("log_access_denied", {
+      username: user.username,
+      detail: encodedPath,
+    });
+    ws.close(1008, "Access denied");
+    return;
+  }
+
   if (!encodedPath) {
     ws.close(1008, "Missing log file path");
     return;

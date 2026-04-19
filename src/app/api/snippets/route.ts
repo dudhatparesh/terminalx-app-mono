@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listSnippets, createSnippet } from "@/lib/snippets";
+import { getUserScoping } from "@/lib/session-scope";
 import { audit } from "@/lib/audit-log";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    return NextResponse.json({ snippets: listSnippets() });
+    const { username, shouldScope } = getUserScoping(req.headers);
+    let snippets = listSnippets();
+    if (shouldScope && username) {
+      snippets = snippets.filter(
+        (s) => !s.createdBy || s.createdBy === username
+      );
+    }
+    return NextResponse.json({ snippets });
   } catch {
     return NextResponse.json(
       { error: "Failed to list snippets" },

@@ -21,7 +21,8 @@ export type AuditEvent =
   | "snippet_created"
   | "snippet_deleted"
   | "replay_started"
-  | "replay_opened";
+  | "replay_opened"
+  | "log_access_denied";
 
 interface AuditEntry {
   timestamp: string;
