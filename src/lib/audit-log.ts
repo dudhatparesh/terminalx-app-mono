@@ -17,7 +17,11 @@ export type AuditEvent =
   | "terminal_disconnected"
   | "ws_origin_rejected"
   | "ws_auth_failed"
-  | "rate_limited";
+  | "rate_limited"
+  | "snippet_created"
+  | "snippet_deleted"
+  | "replay_started"
+  | "replay_opened";
 
 interface AuditEntry {
   timestamp: string;

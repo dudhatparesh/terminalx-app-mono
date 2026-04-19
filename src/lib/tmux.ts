@@ -62,9 +62,13 @@ export function listSessions(): TmuxSession[] {
   }
 }
 
-export function createSession(name: string): void {
+export function createSession(name: string, command?: string): void {
   const safeName = sanitizeSessionName(name);
-  execFileSync(TMUX_BIN, ["new-session", "-d", "-s", safeName], {
+  const args = ["new-session", "-d", "-s", safeName];
+  if (command) {
+    args.push(command);
+  }
+  execFileSync(TMUX_BIN, args, {
     encoding: "utf-8",
     timeout: 5000,
   });

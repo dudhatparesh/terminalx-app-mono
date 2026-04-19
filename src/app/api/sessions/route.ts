@@ -4,8 +4,19 @@ import {
   createSession,
   killSession,
 } from "@/lib/tmux";
-import { getUserScoping, canAccessSession, scopedSessionName } from "@/lib/session-scope";
+import {
+  getUserScoping,
+  canAccessSession,
+  scopedSessionName,
+} from "@/lib/session-scope";
 import { audit } from "@/lib/audit-log";
+import {
+  listMetadata,
+  saveMeta,
+  deleteMeta,
+  commandForKind,
+  isValidKind,
+} from "@/lib/ai-sessions";
 
 export async function GET(req: NextRequest) {
   try {
@@ -13,10 +24,19 @@ export async function GET(req: NextRequest) {
     let sessions = listSessions();
 
     if (shouldScope && username) {
-      sessions = sessions.filter((s) => canAccessSession(username, "user", s.name));
+      sessions = sessions.filter((s) =>
+        canAccessSession(username, "user", s.name)
+      );
     }
 
-    return NextResponse.json({ sessions });
+    const metadata = listMetadata();
+    const byName = new Map(metadata.map((m) => [m.name, m]));
+    const annotated = sessions.map((s) => ({
+      ...s,
+      kind: byName.get(s.name)?.kind ?? "bash",
+    }));
+
+    return NextResponse.json({ sessions: annotated });
   } catch {
     return NextResponse.json({ error: "Failed to list sessions" }, { status: 500 });
   }
@@ -32,7 +52,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name } = body;
+    const { name, kind } = body;
 
     if (!name || typeof name !== "string") {
       return NextResponse.json(
@@ -48,12 +68,35 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const sessionKind = kind === undefined ? "bash" : kind;
+    if (!isValidKind(sessionKind)) {
+      return NextResponse.json(
+        { error: "Invalid session kind: expected bash, claude, or codex" },
+        { status: 400 }
+      );
+    }
+
     const { username } = getUserScoping(req.headers);
     const finalName = scopedSessionName(name, username);
 
-    createSession(finalName);
-    audit("session_created", { username: username || undefined, detail: finalName });
-    return NextResponse.json({ success: true, name: finalName }, { status: 201 });
+    const command = commandForKind(sessionKind);
+    createSession(finalName, command ?? undefined);
+    if (sessionKind !== "bash") {
+      await saveMeta({
+        name: finalName,
+        kind: sessionKind,
+        createdAt: new Date().toISOString(),
+        createdBy: username || undefined,
+      });
+    }
+    audit("session_created", {
+      username: username || undefined,
+      detail: `${finalName} (${sessionKind})`,
+    });
+    return NextResponse.json(
+      { success: true, name: finalName, kind: sessionKind },
+      { status: 201 }
+    );
   } catch {
     return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
   }
@@ -88,6 +131,7 @@ export async function DELETE(req: NextRequest) {
     }
 
     killSession(name);
+    await deleteMeta(name);
     audit("session_deleted", { username: username || undefined, detail: name });
     return NextResponse.json({ success: true });
   } catch {

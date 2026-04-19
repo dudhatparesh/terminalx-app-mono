@@ -26,6 +26,7 @@ import {
   destroyLogStream,
   destroyAllLogStreams,
 } from "../src/lib/log-streamer";
+import { startRecorder } from "../src/lib/session-recorder";
 import { verifyJwt, parseCookies } from "../src/lib/auth";
 import { getAuthMode } from "../src/lib/auth-config";
 import { ensureDefaultAdmin } from "../src/lib/users";
@@ -144,11 +145,26 @@ terminalWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     JSON.stringify({ type: "pty-id", id: ptyInstance.id })
   );
 
+  // Optional session recording
+  const recorder = startRecorder({
+    sessionId,
+    username: user?.username,
+    cols,
+    rows,
+  });
+  if (recorder) {
+    audit("replay_started", {
+      username: user?.username,
+      detail: recorder.id,
+    });
+  }
+
   // PTY output -> WebSocket
   const dataHandler = ptyInstance.process.onData((data: string) => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(data);
     }
+    recorder?.write(data);
   });
 
   // WebSocket -> PTY input
@@ -174,6 +190,7 @@ terminalWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   ws.on("close", () => {
     dataHandler.dispose();
     destroyPty(ptyInstance.id);
+    recorder?.close();
     audit("terminal_disconnected", {
       username: user?.username,
       detail: sessionId,
@@ -183,6 +200,7 @@ terminalWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   ws.on("error", () => {
     dataHandler.dispose();
     destroyPty(ptyInstance.id);
+    recorder?.close();
   });
 });
 
