@@ -12,13 +12,18 @@ export interface TmuxSession {
   kind?: SessionKind;
 }
 
+export interface CreateSessionOptions {
+  dangerouslySkipPermissions?: boolean;
+}
+
 interface UseSessionsReturn {
   sessions: TmuxSession[];
   isLoading: boolean;
   error: string | null;
   createSession: (
     name?: string,
-    kind?: SessionKind
+    kind?: SessionKind,
+    options?: CreateSessionOptions
   ) => Promise<TmuxSession | null>;
   killSession: (name: string) => Promise<boolean>;
   refresh: () => Promise<void>;
@@ -47,13 +52,18 @@ export function useSessions(): UseSessionsReturn {
   const createSession = useCallback(
     async (
       name?: string,
-      kind: SessionKind = "bash"
+      kind: SessionKind = "bash",
+      options: CreateSessionOptions = {}
     ): Promise<TmuxSession | null> => {
       try {
         const res = await fetch("/api/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, kind }),
+          body: JSON.stringify({
+            name,
+            kind,
+            dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+          }),
         });
         if (!res.ok) {
           const j = await res.json().catch(() => null);

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
-import { Terminal, Plus, RefreshCw, X, FlaskConical, Film, Sparkles, Bot } from "lucide-react";
+import { Terminal, Plus, RefreshCw, X, FlaskConical, Film, Sparkles, Bot, AlertTriangle } from "lucide-react";
 import { useSessions, type TmuxSession, type SessionKind } from "@/hooks/useSessions";
 import { UserSection } from "@/components/auth/UserSection";
 import { EngineToggle } from "@/components/terminal/EngineToggle";
@@ -21,6 +21,7 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
   const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
   const [newSessionName, setNewSessionName] = useState("");
   const [newSessionKind, setNewSessionKind] = useState<SessionKind>("bash");
+  const [skipPermissions, setSkipPermissions] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
@@ -61,6 +62,7 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
   const handleOpenDialog = () => {
     setNewSessionName("");
     setNewSessionKind("bash");
+    setSkipPermissions(false);
     setCreateError(null);
     setShowNewSessionDialog(true);
     setTimeout(() => nameInputRef.current?.focus(), 50);
@@ -81,7 +83,10 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
       return;
     }
     setCreateError(null);
-    const session = await createSession(name, newSessionKind);
+    const session = await createSession(name, newSessionKind, {
+      dangerouslySkipPermissions:
+        newSessionKind === "claude" ? skipPermissions : undefined,
+    });
     if (session) {
       setShowNewSessionDialog(false);
       setNewSessionName("");
@@ -285,6 +290,34 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
               </p>
             )}
           </div>
+
+          {newSessionKind === "claude" && (
+            <label
+              className={`mt-2 flex items-start gap-2 px-2 py-1.5 rounded border cursor-pointer transition-colors ${
+                skipPermissions
+                  ? "bg-[#EF4444]/10 border-[#EF4444]/50"
+                  : "bg-[#0D0F12] border-[#2A2D3A] hover:border-[#EF4444]/40"
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={skipPermissions}
+                onChange={(e) => setSkipPermissions(e.target.checked)}
+                className="mt-0.5 accent-[#EF4444] cursor-pointer"
+              />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1 text-[11px] font-medium text-[#EF4444]">
+                  <AlertTriangle size={11} />
+                  <span>Dangerously skip permissions</span>
+                </div>
+                <p className="text-[10px] text-[#6B7280] mt-0.5 leading-tight">
+                  Passes <code className="text-[#E4E4E7]">--dangerously-skip-permissions</code>.
+                  Claude won't ask for approval before running tools — use only
+                  in trusted sandboxes.
+                </p>
+              </div>
+            </label>
+          )}
 
           {createError && (
             <p className="text-[11px] text-[#EF4444] mt-1">{createError}</p>

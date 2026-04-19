@@ -82,15 +82,30 @@ const CLI_BINS: Record<SessionKind, string | null> = {
   codex: "codex",
 };
 
+export interface CommandOptions {
+  dangerouslySkipPermissions?: boolean;
+}
+
 /**
  * Wrap the CLI invocation so tmux's session stays alive even if the CLI
  * exits (e.g., not installed, signed out, crashed). On exit we drop to an
  * interactive bash so the user can inspect the error and retry.
+ *
+ * `dangerouslySkipPermissions` only applies to `claude` and appends
+ * --dangerously-skip-permissions so the CLI doesn't prompt for approvals.
  */
-export function commandForKind(kind: SessionKind): string | null {
+export function commandForKind(
+  kind: SessionKind,
+  opts: CommandOptions = {}
+): string | null {
   const bin = CLI_BINS[kind];
   if (!bin) return null;
-  return `bash -lc '${bin}; ec=$?; echo; echo "[${bin} exited with code $ec — dropping to bash]"; exec bash -l'`;
+  const args: string[] = [];
+  if (kind === "claude" && opts.dangerouslySkipPermissions) {
+    args.push("--dangerously-skip-permissions");
+  }
+  const invocation = [bin, ...args].join(" ");
+  return `bash -lc '${invocation}; ec=$?; echo; echo "[${bin} exited with code $ec — dropping to bash]"; exec bash -l'`;
 }
 
 export function isValidKind(kind: unknown): kind is SessionKind {

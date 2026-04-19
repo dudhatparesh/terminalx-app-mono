@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, kind } = body;
+    const { name, kind, dangerouslySkipPermissions } = body;
 
     if (!name || typeof name !== "string") {
       return NextResponse.json(
@@ -79,7 +79,9 @@ export async function POST(req: NextRequest) {
     const { username } = getUserScoping(req.headers);
     const finalName = scopedSessionName(name, username);
 
-    const command = commandForKind(sessionKind);
+    const command = commandForKind(sessionKind, {
+      dangerouslySkipPermissions: Boolean(dangerouslySkipPermissions),
+    });
     createSession(finalName, command ?? undefined);
     if (sessionKind !== "bash") {
       await saveMeta({
