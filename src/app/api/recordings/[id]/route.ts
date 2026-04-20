@@ -4,10 +4,7 @@ import { getRecordingPath, getRecordingMeta } from "@/lib/session-recorder";
 import { getUserScoping } from "@/lib/session-scope";
 import { audit } from "@/lib/audit-log";
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
     const file = getRecordingPath(id);
@@ -31,10 +28,8 @@ export async function GET(
         "Cache-Control": "private, max-age=60",
       },
     });
-  } catch {
-    return NextResponse.json(
-      { error: "Failed to read recording" },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error("[api/recordings/[id] GET]", err);
+    return NextResponse.json({ error: "Failed to read recording" }, { status: 500 });
   }
 }

@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { ensureSecureDir } from "./secure-dir";
 
 export interface Snippet {
   id: string;
@@ -24,10 +25,7 @@ function snippetsFile() {
 }
 
 function ensureDataDir() {
-  const dir = dataDir();
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
+  ensureSecureDir(dataDir());
 }
 
 let writeLock: Promise<void> = Promise.resolve();

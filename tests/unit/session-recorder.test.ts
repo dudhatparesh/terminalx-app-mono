@@ -48,11 +48,11 @@ describe("session-recorder", () => {
     expect(fs.existsSync(file)).toBe(true);
     const lines = fs.readFileSync(file, "utf-8").trim().split("\n");
     expect(lines.length).toBeGreaterThanOrEqual(2);
-    const header = JSON.parse(lines[0]);
+    const header = JSON.parse(lines[0]!);
     expect(header.v).toBe(1);
     expect(header.sessionId).toBe("my-sess");
     expect(header.username).toBe("alice");
-    const entry = JSON.parse(lines[1]);
+    const entry = JSON.parse(lines[1]!);
     expect(entry.d).toBe("hello");
     expect(typeof entry.t).toBe("number");
   });
@@ -70,7 +70,9 @@ describe("session-recorder", () => {
     expect(rec!.id).not.toMatch(/\\/);
     expect(rec!.file).toContain(path.join(tmpDir, "data", "recordings"));
     // File resolves inside recordings dir even with traversal-y input
-    expect(path.resolve(rec!.file).startsWith(path.resolve(tmpDir, "data", "recordings"))).toBe(true);
+    expect(path.resolve(rec!.file).startsWith(path.resolve(tmpDir, "data", "recordings"))).toBe(
+      true
+    );
     await rec!.close();
   });
 
@@ -98,7 +100,7 @@ describe("session-recorder", () => {
 
     const recs = mod.listRecordings();
     expect(recs).toHaveLength(2);
-    expect(recs[0].startedAt >= recs[1].startedAt).toBe(true);
+    expect(recs[0]!.startedAt >= recs[1]!.startedAt).toBe(true);
   });
 
   it("getRecordingMeta includes createdBy from header", async () => {

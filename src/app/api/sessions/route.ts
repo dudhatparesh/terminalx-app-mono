@@ -1,22 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  listSessions,
-  createSession,
-  killSession,
-} from "@/lib/tmux";
-import {
-  getUserScoping,
-  canAccessSession,
-  scopedSessionName,
-} from "@/lib/session-scope";
+import { listSessions, createSession, killSession } from "@/lib/tmux";
+import { getUserScoping, canAccessSession, scopedSessionName } from "@/lib/session-scope";
 import { audit } from "@/lib/audit-log";
-import {
-  listMetadata,
-  saveMeta,
-  deleteMeta,
-  commandForKind,
-  isValidKind,
-} from "@/lib/ai-sessions";
+import { listMetadata, saveMeta, deleteMeta, commandForKind, isValidKind } from "@/lib/ai-sessions";
 
 export async function GET(req: NextRequest) {
   try {
@@ -24,9 +10,7 @@ export async function GET(req: NextRequest) {
     let sessions = listSessions();
 
     if (shouldScope && username) {
-      sessions = sessions.filter((s) =>
-        canAccessSession(username, "user", s.name)
-      );
+      sessions = sessions.filter((s) => canAccessSession(username, "user", s.name));
     }
 
     const metadata = listMetadata();
@@ -37,7 +21,8 @@ export async function GET(req: NextRequest) {
     }));
 
     return NextResponse.json({ sessions: annotated });
-  } catch {
+  } catch (err) {
+    console.error("[api/sessions GET]", err);
     return NextResponse.json({ error: "Failed to list sessions" }, { status: 500 });
   }
 }
@@ -55,10 +40,7 @@ export async function POST(req: NextRequest) {
     const { name, kind, dangerouslySkipPermissions } = body;
 
     if (!name || typeof name !== "string") {
-      return NextResponse.json(
-        { error: "Missing or invalid session name" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing or invalid session name" }, { status: 400 });
     }
 
     if (!/^[a-zA-Z0-9_.\-]+$/.test(name)) {
@@ -100,7 +82,8 @@ export async function POST(req: NextRequest) {
       { success: true, name: finalName, kind: sessionKind },
       { status: 201 }
     );
-  } catch {
+  } catch (err) {
+    console.error("[api/sessions POST]", err);
     return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
   }
 }
@@ -118,26 +101,21 @@ export async function DELETE(req: NextRequest) {
     const { name } = body;
 
     if (!name || typeof name !== "string") {
-      return NextResponse.json(
-        { error: "Missing or invalid session name" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing or invalid session name" }, { status: 400 });
     }
 
     const { username, role, shouldScope } = getUserScoping(req.headers);
 
     if (shouldScope && username && !canAccessSession(username, role, name)) {
-      return NextResponse.json(
-        { error: "Cannot delete another user's session" },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "Cannot delete another user's session" }, { status: 403 });
     }
 
     killSession(name);
     await deleteMeta(name);
     audit("session_deleted", { username: username || undefined, detail: name });
     return NextResponse.json({ success: true });
-  } catch {
+  } catch (err) {
+    console.error("[api/sessions DELETE]", err);
     return NextResponse.json({ error: "Failed to delete session" }, { status: 500 });
   }
 }

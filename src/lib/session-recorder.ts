@@ -1,15 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
+import { ensureSecureDir } from "./secure-dir";
 
 function recordingsDir() {
   return path.join(process.cwd(), "data", "recordings");
 }
 
 function ensureDir() {
-  const dir = recordingsDir();
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
+  ensureSecureDir(recordingsDir());
 }
 
 function sanitize(name: string): string {
@@ -106,9 +104,7 @@ export function listRecordings(): RecordingMeta[] {
       // skip malformed
     }
   }
-  return out.sort((a, b) =>
-    a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0
-  );
+  return out.sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
 }
 
 export function getRecordingMeta(id: string): RecordingMeta | null {
@@ -150,4 +146,34 @@ export function getRecordingPath(id: string): string | null {
   const file = path.join(recordingsDir(), `${safe}.jsonl`);
   if (!fs.existsSync(file)) return null;
   return file;
+}
+
+/**
+ * Delete recordings older than TERMINUS_RECORDING_RETENTION_DAYS.
+ * Called once at server startup. 0/unset disables retention (keep forever).
+ */
+export function sweepExpiredRecordings(): { deleted: number } {
+  const raw = process.env.TERMINUS_RECORDING_RETENTION_DAYS;
+  const days = raw ? parseInt(raw, 10) : 0;
+  if (!Number.isFinite(days) || days <= 0) return { deleted: 0 };
+
+  const dir = recordingsDir();
+  if (!fs.existsSync(dir)) return { deleted: 0 };
+
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  let deleted = 0;
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith(".jsonl")) continue;
+    const full = path.join(dir, name);
+    try {
+      const stat = fs.statSync(full);
+      if (stat.mtimeMs < cutoff) {
+        fs.unlinkSync(full);
+        deleted++;
+      }
+    } catch {
+      // skip
+    }
+  }
+  return { deleted };
 }

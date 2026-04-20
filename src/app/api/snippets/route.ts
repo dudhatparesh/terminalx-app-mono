@@ -8,16 +8,12 @@ export async function GET(req: NextRequest) {
     const { username, shouldScope } = getUserScoping(req.headers);
     let snippets = listSnippets();
     if (shouldScope && username) {
-      snippets = snippets.filter(
-        (s) => !s.createdBy || s.createdBy === username
-      );
+      snippets = snippets.filter((s) => !s.createdBy || s.createdBy === username);
     }
     return NextResponse.json({ snippets });
-  } catch {
-    return NextResponse.json(
-      { error: "Failed to list snippets" },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error("[api/snippets GET]", err);
+    return NextResponse.json({ error: "Failed to list snippets" }, { status: 500 });
   }
 }
 
@@ -32,16 +28,10 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { name, command, description } = body;
     if (typeof name !== "string" || typeof command !== "string") {
-      return NextResponse.json(
-        { error: "name and command are required strings" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "name and command are required strings" }, { status: 400 });
     }
     if (description !== undefined && typeof description !== "string") {
-      return NextResponse.json(
-        { error: "description must be a string" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "description must be a string" }, { status: 400 });
     }
     const username = req.headers.get("x-username") || undefined;
     const snippet = await createSnippet({

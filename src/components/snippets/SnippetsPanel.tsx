@@ -75,9 +75,7 @@ export function SnippetsPanel() {
   };
 
   const run = (snippet: Snippet) => {
-    const text = snippet.command.endsWith("\n")
-      ? snippet.command
-      : snippet.command + "\n";
+    const text = snippet.command.endsWith("\n") ? snippet.command : snippet.command + "\n";
     emitToActiveTerminal(text);
   };
 
@@ -95,6 +93,7 @@ export function SnippetsPanel() {
           onClick={() => setShowDialog(true)}
           className="p-1 text-[#6B7280] hover:text-[#3B82F6] transition-colors"
           title="New snippet"
+          aria-label="New snippet"
         >
           <Plus size={14} />
         </button>
@@ -104,28 +103,16 @@ export function SnippetsPanel() {
         {isLoading && snippets.length === 0 ? (
           <div className="px-3 py-4 text-[#6B7280] text-center">Loading...</div>
         ) : snippets.length === 0 ? (
-          <div className="px-3 py-4 text-[#6B7280] text-center">
-            No snippets yet
-          </div>
+          <div className="px-3 py-4 text-[#6B7280] text-center">No snippets yet</div>
         ) : (
           snippets.map((snippet) => (
-            <div
-              key={snippet.id}
-              className="px-3 py-2 hover:bg-[#1C1F2B] transition-colors group"
-            >
+            <div key={snippet.id} className="px-3 py-2 hover:bg-[#1C1F2B] transition-colors group">
               <div className="flex items-start gap-2">
-                <FileText
-                  size={14}
-                  className="text-[#6B7280] shrink-0 mt-0.5"
-                />
+                <FileText size={14} className="text-[#6B7280] shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
-                  <div className="text-[#E4E4E7] truncate font-medium">
-                    {snippet.name}
-                  </div>
+                  <div className="text-[#E4E4E7] truncate font-medium">{snippet.name}</div>
                   {snippet.description && (
-                    <div className="text-[11px] text-[#6B7280] truncate">
-                      {snippet.description}
-                    </div>
+                    <div className="text-[11px] text-[#6B7280] truncate">{snippet.description}</div>
                   )}
                   <div
                     className="text-[11px] text-[#6B7280] truncate font-mono"
@@ -139,6 +126,7 @@ export function SnippetsPanel() {
                     onClick={() => insert(snippet)}
                     className="p-1 text-[#6B7280] hover:text-[#E4E4E7] transition-colors"
                     title="Insert into terminal (no Enter)"
+                    aria-label="Insert into terminal (no Enter)"
                   >
                     <FileText size={12} />
                   </button>
@@ -146,6 +134,7 @@ export function SnippetsPanel() {
                     onClick={() => run(snippet)}
                     className="p-1 text-[#6B7280] hover:text-[#22C55E] transition-colors"
                     title="Run (paste + Enter)"
+                    aria-label="Run (paste + Enter)"
                   >
                     <Play size={12} />
                   </button>
@@ -153,6 +142,7 @@ export function SnippetsPanel() {
                     onClick={() => handleDelete(snippet.id)}
                     className="p-1 text-[#6B7280] hover:text-[#EF4444] transition-colors"
                     title="Delete"
+                    aria-label="Delete"
                   >
                     <Trash2 size={12} />
                   </button>
@@ -193,9 +183,7 @@ export function SnippetsPanel() {
               type="text"
               placeholder="Description (optional)"
               value={form.description}
-              onChange={(e) =>
-                setForm({ ...form, description: e.target.value })
-              }
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
               className="px-2 py-1.5 rounded bg-[#0D0F12] border border-[#2A2D3A]
                 text-[#E4E4E7] text-[12px] placeholder:text-[#6B7280]/50
                 focus:outline-none focus:border-[#3B82F6]"

@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { ensureSecureDir } from "./secure-dir";
 
 export type SessionKind = "bash" | "claude" | "codex";
 
@@ -14,9 +15,7 @@ const DATA_DIR = path.join(process.cwd(), "data");
 const FILE = path.join(DATA_DIR, "ai-sessions.json");
 
 function ensureDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-  }
+  ensureSecureDir(DATA_DIR);
 }
 
 let writeLock: Promise<void> = Promise.resolve();
@@ -94,10 +93,7 @@ export interface CommandOptions {
  * `dangerouslySkipPermissions` only applies to `claude` and appends
  * --dangerously-skip-permissions so the CLI doesn't prompt for approvals.
  */
-export function commandForKind(
-  kind: SessionKind,
-  opts: CommandOptions = {}
-): string | null {
+export function commandForKind(kind: SessionKind, opts: CommandOptions = {}): string | null {
   const bin = CLI_BINS[kind];
   if (!bin) return null;
   const args: string[] = [];

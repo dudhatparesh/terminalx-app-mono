@@ -2,7 +2,17 @@
 
 import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
-import { Terminal, Plus, RefreshCw, X, FlaskConical, Film, Sparkles, Bot, AlertTriangle } from "lucide-react";
+import {
+  Terminal,
+  Plus,
+  RefreshCw,
+  X,
+  FlaskConical,
+  Film,
+  Sparkles,
+  Bot,
+  AlertTriangle,
+} from "lucide-react";
 import { useSessions, type TmuxSession, type SessionKind } from "@/hooks/useSessions";
 import { UserSection } from "@/components/auth/UserSection";
 import { EngineToggle } from "@/components/terminal/EngineToggle";
@@ -12,8 +22,7 @@ interface SessionSidebarProps {
 }
 
 export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
-  const { sessions, isLoading, createSession, killSession, refresh } =
-    useSessions();
+  const { sessions, isLoading, createSession, killSession, refresh } = useSessions();
   const [hostname, setHostname] = useState<string>("...");
   const [connectionStatus, setConnectionStatus] = useState<
     "connected" | "reconnecting" | "disconnected"
@@ -95,8 +104,7 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
     }
     setCreateError(null);
     const session = await createSession(name, newSessionKind, {
-      dangerouslySkipPermissions:
-        newSessionKind === "claude" ? skipPermissions : undefined,
+      dangerouslySkipPermissions: newSessionKind === "claude" ? skipPermissions : undefined,
     });
     if (session) {
       setShowNewSessionDialog(false);
@@ -114,13 +122,9 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
             className="w-2 h-2 rounded-full shrink-0"
             style={{ backgroundColor: statusColors[connectionStatus] }}
           />
-          <span className="text-[#E4E4E7] font-medium truncate">
-            {hostname}
-          </span>
+          <span className="text-[#E4E4E7] font-medium truncate">{hostname}</span>
         </div>
-        <span className="text-[11px] text-[#6B7280] capitalize">
-          {connectionStatus}
-        </span>
+        <span className="text-[11px] text-[#6B7280] capitalize">{connectionStatus}</span>
       </div>
 
       {/* Sessions header */}
@@ -132,6 +136,7 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
           onClick={() => refresh()}
           className="p-1 text-[#6B7280] hover:text-[#E4E4E7] transition-colors"
           title="Refresh sessions"
+          aria-label="Refresh sessions"
         >
           <RefreshCw size={12} />
         </button>
@@ -140,13 +145,9 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
       {/* Session list */}
       <div className="flex-1 overflow-y-auto py-1">
         {isLoading && sessions.length === 0 ? (
-          <div className="px-3 py-4 text-[#6B7280] text-center">
-            Loading...
-          </div>
+          <div className="px-3 py-4 text-[#6B7280] text-center">Loading...</div>
         ) : sessions.length === 0 ? (
-          <div className="px-3 py-4 text-[#6B7280] text-center">
-            No sessions
-          </div>
+          <div className="px-3 py-4 text-[#6B7280] text-center">No sessions</div>
         ) : (
           sessions.map((session: TmuxSession) => (
             <button
@@ -164,9 +165,7 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
               )}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[#E4E4E7] truncate">
-                    {session.name}
-                  </span>
+                  <span className="text-[#E4E4E7] truncate">{session.name}</span>
                   {session.kind && session.kind !== "bash" && (
                     <span
                       className={`px-1 py-0.5 text-[9px] rounded leading-none uppercase ${
@@ -189,13 +188,23 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
                 </span>
               </div>
               <span
+                role="button"
+                tabIndex={0}
                 onClick={(e) => {
                   e.stopPropagation();
                   killSession(session.name);
                 }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    killSession(session.name);
+                  }
+                }}
                 className="p-1 text-[#6B7280] hover:text-[#EF4444]
                   opacity-0 group-hover:opacity-100 transition-opacity"
                 title="Kill session"
+                aria-label={`Kill session ${session.name}`}
               >
                 &times;
               </span>
@@ -267,8 +276,7 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
           />
           {newSessionName.trim() && (
             <p className="text-[10px] text-[#6B7280] mt-1">
-              Will be created as{" "}
-              <code className="text-[#E4E4E7]">{previewSlug || "—"}</code>
+              Will be created as <code className="text-[#E4E4E7]">{previewSlug || "—"}</code>
             </p>
           )}
 
@@ -293,8 +301,7 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
                       : "text-[#6B7280] hover:text-[#E4E4E7]"
                   }`}
                   style={{
-                    backgroundColor:
-                      newSessionKind === k.value ? k.color : "transparent",
+                    backgroundColor: newSessionKind === k.value ? k.color : "transparent",
                   }}
                 >
                   {k.label}
@@ -303,8 +310,8 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
             </div>
             {newSessionKind !== "bash" && (
               <p className="text-[10px] text-[#6B7280] mt-1">
-                Runs <code className="text-[#E4E4E7]">{newSessionKind}</code> CLI
-                inside tmux — must be installed & logged in on the server.
+                Runs <code className="text-[#E4E4E7]">{newSessionKind}</code> CLI inside tmux — must
+                be installed & logged in on the server.
               </p>
             )}
           </div>
@@ -330,16 +337,14 @@ export function SessionSidebar({ onOpenSession }: SessionSidebarProps) {
                 </div>
                 <p className="text-[10px] text-[#6B7280] mt-0.5 leading-tight">
                   Passes <code className="text-[#E4E4E7]">--dangerously-skip-permissions</code>.
-                  Claude won't ask for approval before running tools — use only
-                  in trusted sandboxes.
+                  Claude won&apos;t ask for approval before running tools — use only in trusted
+                  sandboxes.
                 </p>
               </div>
             </label>
           )}
 
-          {createError && (
-            <p className="text-[11px] text-[#EF4444] mt-1">{createError}</p>
-          )}
+          {createError && <p className="text-[11px] text-[#EF4444] mt-1">{createError}</p>}
           <button
             onClick={handleCreate}
             className="w-full mt-2 flex items-center justify-center gap-1.5 px-3 py-1.5

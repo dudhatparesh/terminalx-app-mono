@@ -13,10 +13,8 @@ export async function GET(req: NextRequest) {
       enabled: isRecordingEnabled(),
       recordings,
     });
-  } catch {
-    return NextResponse.json(
-      { error: "Failed to list recordings" },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error("[api/recordings GET]", err);
+    return NextResponse.json({ error: "Failed to list recordings" }, { status: 500 });
   }
 }

@@ -55,11 +55,13 @@ export function ReplayView({ id }: ReplayViewProps) {
           setError("Empty recording");
           return;
         }
-        const parsedHeader = JSON.parse(lines[0]) as Header;
+        const parsedHeader = JSON.parse(lines[0]!) as Header;
         const parsedEntries: Entry[] = [];
         for (let i = 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line) continue;
           try {
-            const obj = JSON.parse(lines[i]);
+            const obj = JSON.parse(line);
             if (typeof obj.t === "number" && typeof obj.d === "string") {
               parsedEntries.push(obj);
             }
@@ -100,6 +102,10 @@ export function ReplayView({ id }: ReplayViewProps) {
       return;
     }
     const entry = entries[cursorRef.current];
+    if (!entry) {
+      stop();
+      return;
+    }
     const startedAt = baseTimeRef.current;
     const targetWall = startedAt + entry.t / speed;
     const now = performance.now();
@@ -122,7 +128,7 @@ export function ReplayView({ id }: ReplayViewProps) {
       cursorRef.current = 0;
       clearTerminal();
     }
-    const last = cursorRef.current > 0 ? entries[cursorRef.current - 1].t : 0;
+    const last = cursorRef.current > 0 ? (entries[cursorRef.current - 1]?.t ?? 0) : 0;
     baseTimeRef.current = performance.now() - last / speed;
     setPlaying(true);
     scheduleNext();
@@ -147,12 +153,12 @@ export function ReplayView({ id }: ReplayViewProps) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    const last = cursorRef.current > 0 ? entries[cursorRef.current - 1].t : 0;
+    const last = cursorRef.current > 0 ? (entries[cursorRef.current - 1]?.t ?? 0) : 0;
     baseTimeRef.current = performance.now() - last / speed;
     scheduleNext();
   }, [speed, playing, entries, scheduleNext]);
 
-  const totalDuration = entries.length > 0 ? entries[entries.length - 1].t : 0;
+  const totalDuration = entries.length > 0 ? (entries[entries.length - 1]?.t ?? 0) : 0;
   const percent = totalDuration > 0 ? (position / totalDuration) * 100 : 0;
 
   return (
@@ -162,6 +168,7 @@ export function ReplayView({ id }: ReplayViewProps) {
           onClick={rewind}
           className="p-1.5 text-[#6B7280] hover:text-[#E4E4E7] transition-colors"
           title="Rewind"
+          aria-label="Rewind"
         >
           <Rewind size={14} />
         </button>
@@ -223,12 +230,7 @@ export function ReplayView({ id }: ReplayViewProps) {
         </div>
       ) : (
         <div className="flex-1 overflow-hidden p-2">
-          <Terminal
-            ref={termRef}
-            autoResize
-            wasmUrl="/wterm.wasm"
-            className="h-full w-full"
-          />
+          <Terminal ref={termRef} autoResize wasmUrl="/wterm.wasm" className="h-full w-full" />
         </div>
       )}
     </div>

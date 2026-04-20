@@ -21,12 +21,8 @@ import {
   setMaxSessions,
   destroyAllPtys,
 } from "../src/lib/pty-manager";
-import {
-  createLogStream,
-  destroyLogStream,
-  destroyAllLogStreams,
-} from "../src/lib/log-streamer";
-import { startRecorder } from "../src/lib/session-recorder";
+import { createLogStream, destroyLogStream, destroyAllLogStreams } from "../src/lib/log-streamer";
+import { startRecorder, sweepExpiredRecordings } from "../src/lib/session-recorder";
 import { verifyJwt, parseCookies } from "../src/lib/auth";
 import { getAuthMode } from "../src/lib/auth-config";
 import { ensureDefaultAdmin } from "../src/lib/users";
@@ -34,19 +30,10 @@ import { ensureDefaultAdmin } from "../src/lib/users";
 // ── Config ──────────────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
-const TERMINUS_ROOT = path.resolve(
-  process.env.TERMINUS_ROOT || process.env.HOME || "/"
-);
-const TERMINUS_SHELL =
-  process.env.TERMINUS_SHELL || process.env.SHELL || "/bin/bash";
-const TERMINUS_SCROLLBACK = parseInt(
-  process.env.TERMINUS_SCROLLBACK || "10000",
-  10
-);
-const TERMINUS_MAX_SESSIONS = parseInt(
-  process.env.TERMINUS_MAX_SESSIONS || "20",
-  10
-);
+const TERMINUS_ROOT = path.resolve(process.env.TERMINUS_ROOT || process.env.HOME || "/");
+const TERMINUS_SHELL = process.env.TERMINUS_SHELL || process.env.SHELL || "/bin/bash";
+const TERMINUS_SCROLLBACK = parseInt(process.env.TERMINUS_SCROLLBACK || "10000", 10);
+const TERMINUS_MAX_SESSIONS = parseInt(process.env.TERMINUS_MAX_SESSIONS || "20", 10);
 const TERMINUS_READ_ONLY = process.env.TERMINUS_READ_ONLY === "true";
 const TERMINUS_HOST = process.env.TERMINUS_HOST || "0.0.0.0";
 
@@ -56,10 +43,7 @@ const AUTH_MODE = getAuthMode();
 
 // ── WebSocket Auth Helper ──────────────────────────────────────────────────
 
-async function authenticateWebSocket(
-  req: IncomingMessage,
-  socket: Socket
-): Promise<boolean> {
+async function authenticateWebSocket(req: IncomingMessage, socket: Socket): Promise<boolean> {
   // Only skip auth when explicitly in "none" mode
   if (AUTH_MODE === "none") return true;
 
@@ -141,9 +125,7 @@ terminalWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   }
 
   // Send PTY ID to client
-  ws.send(
-    JSON.stringify({ type: "pty-id", id: ptyInstance.id })
-  );
+  ws.send(JSON.stringify({ type: "pty-id", id: ptyInstance.id }));
 
   // Optional session recording
   const recorder = startRecorder({
@@ -215,11 +197,7 @@ logsWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   // In local multi-user mode, only admins can tail logs (shared host logs
   // may contain other users' traces / secrets).
   const user = (req as AuthenticatedRequest).user;
-  if (
-    process.env.TERMINALX_AUTH_MODE === "local" &&
-    user &&
-    user.role !== "admin"
-  ) {
+  if (process.env.TERMINALX_AUTH_MODE === "local" && user && user.role !== "admin") {
     audit("log_access_denied", {
       username: user.username,
       detail: encodedPath,
@@ -289,7 +267,7 @@ function ensureFileWatcher(): void {
 
   sharedWatcher = watch(TERMINUS_ROOT, {
     ignored: [
-      /(^|[\/\\])\../,          // dotfiles
+      /(^|[\/\\])\../, // dotfiles
       "**/node_modules/**",
       "**/.git/**",
       "**/.next/**",
@@ -429,6 +407,11 @@ app.prepare().then(() => {
   ensureDefaultAdmin().catch((err) => {
     console.error("[auth] Failed to create default admin:", err);
   });
+
+  const sweep = sweepExpiredRecordings();
+  if (sweep.deleted > 0) {
+    console.log(`[recorder] swept ${sweep.deleted} expired recording(s)`);
+  }
 
   server.listen(PORT, TERMINUS_HOST, () => {
     console.log(`TerminalX server ready on http://${TERMINUS_HOST}:${PORT}`);

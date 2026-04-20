@@ -22,7 +22,8 @@ export type AuditEvent =
   | "snippet_deleted"
   | "replay_started"
   | "replay_opened"
-  | "log_access_denied";
+  | "log_access_denied"
+  | "jwt_verify_failed";
 
 interface AuditEntry {
   timestamp: string;
