@@ -12,7 +12,7 @@ users should track `main` until a stable 1.0 is cut.
 
 Use GitHub's private vulnerability reporting:
 
-1. Go to https://github.com/dudhatparesh/terminalx-app/security/advisories/new
+1. Go to https://github.com/dudhatparesh/terminalx-app-mono/security/advisories/new
 2. Describe the issue, impact, and (if possible) a reproduction.
 3. You'll get an acknowledgement within 72 hours.
 
