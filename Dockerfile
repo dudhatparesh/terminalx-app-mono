@@ -22,7 +22,10 @@ RUN useradd --create-home --shell /bin/bash --uid 1001 terminus
 WORKDIR /app
 
 # Install dependencies (cached layer). Chown so the app user owns node_modules.
+# vendor/ must be present before `npm ci` because package.json references
+# vendored wterm tarballs (e.g. @wterm/react → file:vendor/wterm/*.tgz).
 COPY --chown=terminus:terminus package.json package-lock.json .npmrc ./
+COPY --chown=terminus:terminus vendor/ ./vendor/
 RUN npm ci --include=dev
 
 # Copy source, owned by the app user.
