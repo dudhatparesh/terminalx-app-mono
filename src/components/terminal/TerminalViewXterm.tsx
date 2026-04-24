@@ -5,7 +5,7 @@ import { Terminal } from "xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
-import { Upload, Copy, Check } from "lucide-react";
+import { Upload, Copy, Check, ChevronUp, ChevronDown, ChevronsDown } from "lucide-react";
 import "xterm/css/xterm.css";
 
 import { subscribeToTerminalBus } from "@/lib/terminal-bus";
@@ -316,48 +316,69 @@ export function TerminalViewXterm({
     });
   }, []);
 
-  // Touch scroll handlers — on mobile, drag a finger vertically in the
-  // terminal area to scroll xterm's scrollback. Below a small threshold
-  // the gesture is treated as a tap so focus / selection still work.
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length !== 1) return;
-    const y = e.touches[0]!.clientY;
-    touchStartYRef.current = y;
-    touchLastYRef.current = y;
-    touchScrolledRef.current = false;
-  }, []);
+  // Touch scroll — xterm registers its own native touch listeners on the
+  // canvas (for selection/focus) so React synthetic handlers on the
+  // wrapper see the events too late. Attach a native listener on the
+  // wrapper in the *capture* phase so we can intercept before xterm,
+  // and mark touchmove as non-passive so we can preventDefault and stop
+  // xterm from claiming the gesture.
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
 
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length !== 1) return;
-    const term = terminalRef.current;
-    const startY = touchStartYRef.current;
-    const lastY = touchLastYRef.current;
-    if (!term || startY === null || lastY === null) return;
-    const y = e.touches[0]!.clientY;
-    // Ignore short drags so a tap still focuses / starts selection.
-    const totalDelta = Math.abs(y - startY);
-    const SCROLL_THRESHOLD = 8;
-    if (!touchScrolledRef.current && totalDelta < SCROLL_THRESHOLD) return;
-    const fontSize = (term.options.fontSize ?? 14) as number;
-    const lineHeightMult = (term.options.lineHeight ?? 1.4) as number;
-    const lineHeightPx = Math.max(1, Math.round(fontSize * lineHeightMult));
-    const delta = y - lastY;
-    const lines = Math.trunc(delta / lineHeightPx);
-    if (lines !== 0) {
-      // Finger down = scroll up into history (negative lines for xterm).
-      term.scrollLines(-lines);
-      // Advance the baseline by the whole number of lines we consumed so
-      // remainder pixels accumulate for the next move event.
-      touchLastYRef.current = lastY + lines * lineHeightPx;
-    }
-    touchScrolledRef.current = true;
-  }, []);
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const y = e.touches[0]!.clientY;
+      touchStartYRef.current = y;
+      touchLastYRef.current = y;
+      touchScrolledRef.current = false;
+    };
 
-  const handleTouchEnd = useCallback(() => {
-    touchStartYRef.current = null;
-    touchLastYRef.current = null;
-    // touchScrolledRef stays true for the onPointerUp that fires right
-    // after — handlePointerUp reads + clears it.
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const term = terminalRef.current;
+      const startY = touchStartYRef.current;
+      const lastY = touchLastYRef.current;
+      if (!term || startY === null || lastY === null) return;
+      const y = e.touches[0]!.clientY;
+      const totalDelta = Math.abs(y - startY);
+      const SCROLL_THRESHOLD = 8;
+      if (!touchScrolledRef.current && totalDelta < SCROLL_THRESHOLD) return;
+      // Past threshold: this gesture is a scroll. Prevent default so the
+      // page doesn't fight us, and so xterm doesn't try to start a
+      // selection.
+      e.preventDefault();
+      const fontSize = (term.options.fontSize ?? 14) as number;
+      const lineHeightMult = (term.options.lineHeight ?? 1.4) as number;
+      const lineHeightPx = Math.max(1, Math.round(fontSize * lineHeightMult));
+      const delta = y - lastY;
+      const lines = Math.trunc(delta / lineHeightPx);
+      if (lines !== 0) {
+        // Finger down = scroll up into history (negative lines for xterm).
+        term.scrollLines(-lines);
+        touchLastYRef.current = lastY + lines * lineHeightPx;
+      }
+      touchScrolledRef.current = true;
+    };
+
+    const onTouchEnd = () => {
+      touchStartYRef.current = null;
+      touchLastYRef.current = null;
+      // touchScrolledRef stays true for the onPointerUp that fires right
+      // after — handlePointerUp reads + clears it.
+    };
+
+    wrapper.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
+    wrapper.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
+    wrapper.addEventListener("touchend", onTouchEnd, { capture: true, passive: true });
+    wrapper.addEventListener("touchcancel", onTouchEnd, { capture: true, passive: true });
+
+    return () => {
+      wrapper.removeEventListener("touchstart", onTouchStart, { capture: true });
+      wrapper.removeEventListener("touchmove", onTouchMove, { capture: true });
+      wrapper.removeEventListener("touchend", onTouchEnd, { capture: true });
+      wrapper.removeEventListener("touchcancel", onTouchEnd, { capture: true });
+    };
   }, []);
 
   // Receive snippet injections from the terminal bus
@@ -499,9 +520,6 @@ export function TerminalViewXterm({
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       onPointerUp={handlePointerUp}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
     >
       <div ref={containerRef} className="h-full w-full" style={{ backgroundColor: "#0a0b10" }} />
 
@@ -549,6 +567,58 @@ export function TerminalViewXterm({
           )}
         </button>
       )}
+
+      {/* Scroll pad — explicit controls for paginating scrollback.
+          Native touch/wheel scroll is always best-effort on mobile given
+          xterm's own event handling, so these buttons give users a
+          reliable way to page up/down and jump back to live output. */}
+      <div
+        className="absolute z-40 flex flex-col gap-1 right-2"
+        style={{ bottom: isMobile ? 48 : 12 }}
+      >
+        <button
+          type="button"
+          aria-label="scroll up one page"
+          title="scroll up"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={() => terminalRef.current?.scrollPages(-1)}
+          className="w-8 h-8 flex items-center justify-center rounded
+            bg-[#14161e]/90 border border-[#252933] text-[#a8b3a6]
+            hover:text-[#00ff88] hover:border-[#00cc6e] transition-colors
+            backdrop-blur-sm shadow-lg"
+        >
+          <ChevronUp size={14} />
+        </button>
+        <button
+          type="button"
+          aria-label="scroll down one page"
+          title="scroll down"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={() => terminalRef.current?.scrollPages(1)}
+          className="w-8 h-8 flex items-center justify-center rounded
+            bg-[#14161e]/90 border border-[#252933] text-[#a8b3a6]
+            hover:text-[#00ff88] hover:border-[#00cc6e] transition-colors
+            backdrop-blur-sm shadow-lg"
+        >
+          <ChevronDown size={14} />
+        </button>
+        <button
+          type="button"
+          aria-label="jump to live output"
+          title="jump to bottom"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={() => terminalRef.current?.scrollToBottom()}
+          className="w-8 h-8 flex items-center justify-center rounded
+            bg-[#14161e]/90 border border-[#252933] text-[#a8b3a6]
+            hover:text-[#00ff88] hover:border-[#00cc6e] transition-colors
+            backdrop-blur-sm shadow-lg"
+        >
+          <ChevronsDown size={14} />
+        </button>
+      </div>
 
       {/* Mobile special keys toolbar */}
       {isMobile && (
