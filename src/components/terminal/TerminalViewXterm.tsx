@@ -29,6 +29,7 @@ export function TerminalViewXterm({
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copyBtnPos, setCopyBtnPos] = useState<{ x: number; y: number } | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   const [ctrlActive, setCtrlActive] = useState(false);
   const [altActive, setAltActive] = useState(false);
@@ -260,10 +261,46 @@ export function TerminalViewXterm({
     if (!term) return;
     const disposable = term.onSelectionChange(() => {
       const sel = term.getSelection();
-      setHasSelection(sel.length > 0);
+      const has = sel.length > 0;
+      setHasSelection(has);
       setCopied(false);
+      // Selection cleared (user clicked away or typed) — hide the button.
+      if (!has) setCopyBtnPos(null);
     });
     return () => disposable.dispose();
+  }, []);
+
+  // Anchor the copy button to where the user finished selecting, so
+  // they don't have to sling the mouse to a top-right corner button.
+  // We listen at the wrapper level and read the selection after the
+  // pointer-up so xterm has had a chance to update.
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    const wrapper = wrapperRef.current;
+    const term = terminalRef.current;
+    if (!wrapper || !term) return;
+    const clientX = e.clientX;
+    const clientY = e.clientY;
+    // Give xterm a frame to finalize the selection before we peek at it.
+    requestAnimationFrame(() => {
+      if (!terminalRef.current) return;
+      const sel = terminalRef.current.getSelection();
+      if (!sel) {
+        setCopyBtnPos(null);
+        return;
+      }
+      const rect = wrapper.getBoundingClientRect();
+      // Approximate button size for edge clamping (measured render ~82×30).
+      const BW = 84;
+      const BH = 32;
+      const gap = 8;
+      let x = clientX - rect.left + gap;
+      let y = clientY - rect.top + gap;
+      if (x + BW > rect.width) x = clientX - rect.left - BW - gap;
+      if (y + BH > rect.height) y = clientY - rect.top - BH - gap;
+      x = Math.max(4, x);
+      y = Math.max(4, y);
+      setCopyBtnPos({ x, y });
+    });
   }, []);
 
   // Receive snippet injections from the terminal bus
@@ -281,10 +318,16 @@ export function TerminalViewXterm({
     if (!term) return;
     const sel = term.getSelection();
     if (!sel) return;
+    const finish = () => {
+      setCopied(true);
+      setTimeout(() => {
+        setCopied(false);
+        setCopyBtnPos(null);
+      }, 1200);
+    };
     try {
       await navigator.clipboard.writeText(sel);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      finish();
     } catch {
       // Fallback for older browsers
       const textarea = document.createElement("textarea");
@@ -293,8 +336,7 @@ export function TerminalViewXterm({
       textarea.select();
       document.execCommand("copy");
       document.body.removeChild(textarea);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      finish();
     }
   }, []);
 
@@ -398,6 +440,7 @@ export function TerminalViewXterm({
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
+      onPointerUp={handlePointerUp}
     >
       <div ref={containerRef} className="h-full w-full" style={{ backgroundColor: "#0a0b10" }} />
 
@@ -414,23 +457,26 @@ export function TerminalViewXterm({
         </div>
       )}
 
-      {/* Copy button — appears when text is selected */}
+      {/* Copy button — anchors to wherever the user finished selecting.
+          Falls back to the top-right corner if we somehow don't have a
+          pointer position (e.g. keyboard-driven selection). */}
       {hasSelection && (
         <button
           onClick={handleCopy}
-          className="absolute top-2 right-2 flex items-center gap-1.5 px-2.5 py-1.5
-            rounded bg-[#14161e] border border-[#1a1d24] text-[12px] text-[#e6f0e4]
+          className="absolute flex items-center gap-1.5 px-2.5 py-1.5
+            rounded bg-[#14161e] border border-[#252933] text-[12px] text-[#e6f0e4]
             hover:bg-[#1a1d24] transition-colors shadow-lg z-50 cursor-pointer"
+          style={copyBtnPos ? { left: copyBtnPos.x, top: copyBtnPos.y } : { top: 8, right: 8 }}
         >
           {copied ? (
             <>
               <Check size={14} className="text-[#00ff88]" />
-              Copied
+              copied
             </>
           ) : (
             <>
               <Copy size={14} />
-              Copy
+              copy
             </>
           )}
         </button>
