@@ -463,6 +463,13 @@ export function TerminalViewXterm({
       {hasSelection && copyBtnPos && (
         <button
           onClick={handleCopy}
+          // Stop pointer events from bubbling to the wrapper — otherwise
+          // the wrapper's onPointerUp handler re-anchors the button to
+          // the tap coordinates on the button itself, making it jump
+          // down-right with every tap (especially visible on mobile
+          // where the tap offset differs from the mouse click origin).
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
           className="absolute flex items-center gap-1.5 px-2.5 py-1.5
             rounded bg-[#14161e] border border-[#252933] text-[12px] text-[#e6f0e4]
             hover:bg-[#1a1d24] transition-colors shadow-lg z-50 cursor-pointer"
