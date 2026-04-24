@@ -59,6 +59,16 @@ export function TerminalViewWterm({
               if (!msg.data.endsWith("\n")) term.write("\r\n");
               return;
             }
+            // Chunked scrollback — see TerminalViewXterm for details.
+            if (msg.type === "scrollback-begin") return;
+            if (msg.type === "scrollback-chunk" && typeof msg.data === "string") {
+              term.write(msg.data);
+              return;
+            }
+            if (msg.type === "scrollback-end") {
+              term.write("\r\n");
+              return;
+            }
             if (msg.type === "session-ended") {
               // Shell exited / tmux session killed from inside the terminal.
               // Suppress reconnect so we don't spawn a new session.

@@ -97,15 +97,26 @@ export function TerminalViewXterm({
               return; // Skip control messages
             }
             if (msg.type === "scrollback" && typeof msg.data === "string") {
-              // Seed xterm's scrollback with tmux's pane history. We write
-              // the captured bytes (which include ANSI color codes) so it
-              // lands in scrollback the same way live output would. The
-              // subsequent tmux attach will redraw the current screen on
-              // top, which is exactly what we want.
+              // Seed xterm's scrollback with tmux's pane history. Write
+              // the captured bytes (ANSI included) so they land in
+              // scrollback the same way live output would. The tmux
+              // attach will redraw the current screen on top.
               terminalRef.current.write(msg.data);
-              // Make sure the captured chunk ends with a clean line so
-              // the live redraw doesn't glue onto the last line.
               if (!msg.data.endsWith("\n")) terminalRef.current.write("\r\n");
+              return;
+            }
+            // Large scrollback captures (e.g. 10k ANSI lines ~1 MB) arrive
+            // chunked because a single WS frame would exceed the 1 MB
+            // maxPayload. Stream chunks straight into xterm in order; the
+            // live PTY feed is held back on the server until the last
+            // chunk is queued.
+            if (msg.type === "scrollback-begin") return;
+            if (msg.type === "scrollback-chunk" && typeof msg.data === "string") {
+              terminalRef.current.write(msg.data);
+              return;
+            }
+            if (msg.type === "scrollback-end") {
+              terminalRef.current.write("\r\n");
               return;
             }
             if (msg.type === "session-ended") {

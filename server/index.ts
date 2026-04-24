@@ -136,14 +136,32 @@ terminalWss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   // mouse-mode OFF (otherwise tmux hijacks drag-select and browser Cmd+C
   // stops working), so the history has to live client-side in xterm.
   //
-  // Wrap the capture in a "scrollback" marker pair so the client knows
-  // this chunk isn't fresh PTY output — it writes it to the terminal
-  // verbatim (which populates scrollback via xterm's line buffer) and
-  // then resets the cursor/screen before the live attach redraws.
+  // The capture can be large (ANSI bytes for 10k lines routinely crosses
+  // 1 MB) and our WebSocket's maxPayload is 1 MB, so we chunk the
+  // payload into frames that fit comfortably inside the limit — framed
+  // with begin/chunk/end control messages so the client can reconstruct
+  // and write it in order before the live PTY feed arrives.
   try {
     const history = capturePaneHistory(sessionId, TERMINUS_SCROLLBACK);
     if (history && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "scrollback", data: history }));
+      const CHUNK_BYTES = 512 * 1024; // half of maxPayload, JSON-safe
+      if (history.length <= CHUNK_BYTES) {
+        ws.send(JSON.stringify({ type: "scrollback", data: history }));
+      } else {
+        ws.send(JSON.stringify({ type: "scrollback-begin" }));
+        for (let i = 0; i < history.length; i += CHUNK_BYTES) {
+          if (ws.readyState !== WebSocket.OPEN) break;
+          ws.send(
+            JSON.stringify({
+              type: "scrollback-chunk",
+              data: history.slice(i, i + CHUNK_BYTES),
+            })
+          );
+        }
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "scrollback-end" }));
+        }
+      }
     }
   } catch {
     // Capture failed — fall through without seeding.
