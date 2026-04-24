@@ -457,16 +457,16 @@ export function TerminalViewXterm({
         </div>
       )}
 
-      {/* Copy button — anchors to wherever the user finished selecting.
-          Falls back to the top-right corner if we somehow don't have a
-          pointer position (e.g. keyboard-driven selection). */}
-      {hasSelection && (
+      {/* Copy button — only shown while we have both an active selection
+          and a pointer-up anchor. After copy we clear the anchor so the
+          button hides cleanly instead of snapping back to a corner. */}
+      {hasSelection && copyBtnPos && (
         <button
           onClick={handleCopy}
           className="absolute flex items-center gap-1.5 px-2.5 py-1.5
             rounded bg-[#14161e] border border-[#252933] text-[12px] text-[#e6f0e4]
             hover:bg-[#1a1d24] transition-colors shadow-lg z-50 cursor-pointer"
-          style={copyBtnPos ? { left: copyBtnPos.x, top: copyBtnPos.y } : { top: 8, right: 8 }}
+          style={{ left: copyBtnPos.x, top: copyBtnPos.y }}
         >
           {copied ? (
             <>
