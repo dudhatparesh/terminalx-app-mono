@@ -1,6 +1,7 @@
 import { Bot, type Context } from "grammy";
 import { listSessions, createSession, killSession, hasSession } from "@/lib/tmux";
 import { canAccessSession, scopedSessionName } from "@/lib/session-scope";
+import { isPaneTui } from "@/lib/tmux";
 import { commandForKind, saveMeta, isValidKind, type SessionKind } from "@/lib/ai-sessions";
 import { resolveTelegramIdentity, botIsConfigured, type BotIdentity } from "./auth";
 import { sessionsKeyboard, CB } from "./keyboard";
@@ -23,6 +24,8 @@ import {
   sendText,
   scroll,
   snap,
+  defaultViewMode,
+  resetChatBaseline,
 } from "./streamer";
 import {
   startClaudeTranscript,
@@ -59,7 +62,7 @@ async function reply(ctx: Context, text: string, opts: Parameters<Context["reply
 async function attachToTopic(b: Bot, identity: BotIdentity, binding: TopicBinding): Promise<void> {
   const chatId = ctxChatId();
   if (!chatId) return;
-  await setTopic(binding);
+  await setTopic({ ...binding, viewMode: binding.viewMode ?? defaultViewMode(binding.kind) });
   startStreamer(b, binding.topicId);
   if (binding.kind === "claude") {
     const started = startClaudeTranscript(b, chatId, binding.topicId, binding.jsonlOffset);
@@ -89,7 +92,8 @@ async function handleStart(ctx: Context) {
       "  • text → stdin",
       "  • reply with a file → upload to session cwd",
       "  • /snap, /detach, /kill, /get <relpath>",
-      "  • inline keyboard: ^C ^D Tab ↵ arrows scroll snap detach kill",
+      "  • /view [screen|chat] — toggle pinned-screen vs message-stream view",
+      "  • inline keyboard: ^C ^D Tab ↵ arrows scroll snap view detach kill",
     ].join("\n")
   );
 }
@@ -246,6 +250,36 @@ async function handleSnap(ctx: Context) {
   snap(bot, topicId);
 }
 
+async function toggleView(topicId: number): Promise<"screen" | "chat"> {
+  const binding = getTopic(topicId);
+  if (!binding) return "screen";
+  const current = binding.viewMode ?? defaultViewMode(binding.kind);
+  const next: "screen" | "chat" = current === "screen" ? "chat" : "screen";
+  await patchTopic(topicId, { viewMode: next });
+  // Reset baseline so chat mode doesn't dump the entire screen on switch.
+  resetChatBaseline(topicId);
+  return next;
+}
+
+async function handleView(ctx: Context) {
+  if (!bot) return;
+  const identity = await gate(ctx);
+  if (!identity) return;
+  const topicId = ctx.message?.message_thread_id;
+  if (!topicId) return;
+  const arg = (ctx.message?.text?.split(/\s+/)[1] ?? "").toLowerCase();
+  if (arg === "screen" || arg === "chat") {
+    await patchTopic(topicId, { viewMode: arg });
+    resetChatBaseline(topicId);
+    await reply(ctx, `view: ${arg}`);
+    if (bot) snap(bot, topicId);
+    return;
+  }
+  const next = await toggleView(topicId);
+  await reply(ctx, `view: ${next}`);
+  if (bot) snap(bot, topicId);
+}
+
 async function handleGet(ctx: Context) {
   if (!bot) return;
   const identity = await gate(ctx);
@@ -281,13 +315,35 @@ async function handleText(ctx: Context) {
   if (!bot) return;
   const identity = await gate(ctx);
   if (!identity) return;
-  const topicId = ctx.message?.message_thread_id;
   const text = ctx.message?.text;
-  if (!topicId || !text) return;
-  if (text.startsWith("/")) return; // commands handled by their own hooks
+  if (!text || text.startsWith("/")) return; // commands handled by their own hooks
+  const topicId = ctx.message?.message_thread_id;
+  if (!topicId) {
+    // User typed in the General topic. The bot doesn't forward text from
+    // there — give a small hint so they know what to do.
+    await reply(ctx, "type inside a session topic to send to its terminal. /sessions to list.");
+    return;
+  }
   const binding = getTopic(topicId);
-  if (!binding) return;
+  if (!binding) {
+    await reply(ctx, "this topic isn't bound to a session anymore.");
+    return;
+  }
   sendText(binding.sessionName, text, true);
+
+  // In chat mode against a TUI (claude, etc.) the actual response can
+  // take many seconds to land via the JSONL transcript. Ack the input
+  // right away so the user knows the bot received it instead of staring
+  // at silence.
+  const mode = binding.viewMode ?? "screen";
+  if (mode === "chat" && isPaneTui(binding.sessionName)) {
+    try {
+      await ctx.reply("📩 received · processing…");
+    } catch {
+      /* ignore */
+    }
+  }
+
   setTimeout(() => snap(bot!, topicId), 250);
 }
 
@@ -386,6 +442,12 @@ async function handleCallback(ctx: Context) {
     case CB.SNAP:
       // handled below
       break;
+    case CB.VIEW: {
+      const next = await toggleView(topicId);
+      await ctx.answerCallbackQuery({ text: `view: ${next}` });
+      if (bot) snap(bot, topicId);
+      return;
+    }
     case CB.DETACH:
       await stopStreamer(topicId);
       stopClaudeTranscript(topicId);
@@ -429,6 +491,7 @@ export async function startTelegramBot(): Promise<Bot | null> {
   bot.command("detach", handleDetach);
   bot.command("kill", handleKill);
   bot.command("snap", handleSnap);
+  bot.command("view", handleView);
   bot.command("get", handleGet);
   bot.command("tab", (ctx) => handleSlashKey(ctx, "Tab"));
   bot.command("enter", (ctx) => handleSlashKey(ctx, "Enter"));
@@ -443,6 +506,10 @@ export async function startTelegramBot(): Promise<Bot | null> {
 
   // inline keyboard
   bot.on("callback_query:data", handleCallback);
+
+  // grammy needs bot.init() to fetch its own info before handleUpdate works
+  // when we're driving updates ourselves (webhook mode without bot.start()).
+  await bot.init();
 
   // remember the configured forum chat id so other modules can reach it
   const forumChatId = Number(process.env.TERMINALX_TELEGRAM_FORUM_CHAT_ID);
@@ -473,6 +540,28 @@ export async function startTelegramBot(): Promise<Bot | null> {
 /** Hand a parsed Telegram update from the webhook into the bot. */
 export async function handleTelegramUpdate(update: object): Promise<void> {
   if (!bot) return;
+  // Optional debug — set TERMINALX_TELEGRAM_DEBUG=1 to log every incoming
+  // update's chat / from / text. Useful for triaging delivery problems
+  // without rebuilding; off by default since each update would otherwise
+  // print a line.
+  if (process.env.TERMINALX_TELEGRAM_DEBUG === "1") {
+    try {
+      const u = update as {
+        update_id?: number;
+        message?: {
+          from?: { id?: number; username?: string };
+          chat?: { id?: number; type?: string };
+          text?: string;
+        };
+      };
+      const m = u.message;
+      console.log(
+        `[telegram] update id=${u.update_id} chat=${m?.chat?.id}/${m?.chat?.type} from=${m?.from?.id}/@${m?.from?.username} text=${JSON.stringify(m?.text)}`
+      );
+    } catch {
+      /* ignore */
+    }
+  }
   await bot.handleUpdate(update as Parameters<Bot["handleUpdate"]>[0]);
 }
 

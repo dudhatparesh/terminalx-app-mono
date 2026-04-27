@@ -17,6 +17,7 @@ export const CB = {
   SCROLL_UP: "s:up",
   SCROLL_DOWN: "s:dn",
   SNAP: "s:snap",
+  VIEW: "s:view",
   DETACH: "s:det",
   KILL: "s:kil",
   ATTACH_PREFIX: "a:", // a:<sessionName>
@@ -45,6 +46,7 @@ export function attachedKeyboard(): InlineKeyboardMarkup {
         { text: "snap", callback_data: CB.SNAP },
       ],
       [
+        { text: "toggle view", callback_data: CB.VIEW },
         { text: "detach", callback_data: CB.DETACH },
         { text: "kill", callback_data: CB.KILL },
       ],

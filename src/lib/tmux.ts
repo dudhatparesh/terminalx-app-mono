@@ -34,6 +34,76 @@ export function capturePaneHistory(name: string, lines = 10000): string {
 }
 
 /**
+ * Capture only the *visible* pane — the live screen the user would see if
+ * they were attached. No history padding, no scrollback. Used by the
+ * Telegram streamer to render a screen snapshot every few seconds.
+ */
+export function captureVisiblePane(name: string): string {
+  const safeName = sanitizeSessionName(name);
+  try {
+    return execFileSync(TMUX_BIN, ["capture-pane", "-p", "-e", "-J", "-t", safeName], {
+      encoding: "utf-8",
+      timeout: 5000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * True when the pane's foreground program is using the alternate screen
+ * buffer (vim, htop, less, etc.). Note: Claude Code renders in the main
+ * buffer so this returns false for it — see `paneForegroundCommand` /
+ * `isPaneTui` for a more reliable TUI check.
+ */
+export function isPaneAlternate(name: string): boolean {
+  const safeName = sanitizeSessionName(name);
+  try {
+    const out = execFileSync(
+      TMUX_BIN,
+      ["display-message", "-p", "-t", safeName, "#{alternate_on}"],
+      { encoding: "utf-8", timeout: 2000 }
+    );
+    return out.trim() === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The basename of the pane's foreground process — what `tmux
+ * display-message #{pane_current_command}` returns. Empty string on
+ * failure.
+ */
+export function paneForegroundCommand(name: string): string {
+  const safeName = sanitizeSessionName(name);
+  try {
+    return execFileSync(
+      TMUX_BIN,
+      ["display-message", "-p", "-t", safeName, "#{pane_current_command}"],
+      { encoding: "utf-8", timeout: 2000 }
+    ).trim();
+  } catch {
+    return "";
+  }
+}
+
+const SHELL_COMMANDS = new Set(["bash", "zsh", "sh", "fish", "dash", "ash", "ksh", "tcsh"]);
+
+/**
+ * Heuristic: is the pane currently running something other than a plain
+ * shell? Used to decide whether chat-mode line-diffing is going to be
+ * useful (it isn't, against any TUI app — claude code, vim, htop, less).
+ */
+export function isPaneTui(name: string): boolean {
+  if (isPaneAlternate(name)) return true;
+  const cmd = paneForegroundCommand(name);
+  if (!cmd) return false;
+  return !SHELL_COMMANDS.has(cmd);
+}
+
+/**
  * Raise tmux's per-session scrollback limit for any session the server
  * creates from now on. Runs at server startup; also invoked defensively
  * from createSession. Failures are ignored (e.g. no tmux server running
