@@ -43,6 +43,7 @@
     "chokidar": "^5.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "grammy": "^1.42.0",
     "jose": "^6.2.2",
     "just-bash": "^2.14.2",
     "lucide-react": "^1.8.0",

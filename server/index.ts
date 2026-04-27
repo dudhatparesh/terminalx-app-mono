@@ -28,6 +28,7 @@ import { startRecorder, sweepExpiredRecordings } from "../src/lib/session-record
 import { verifyJwt, parseCookies } from "../src/lib/auth";
 import { getAuthMode } from "../src/lib/auth-config";
 import { ensureDefaultAdmin } from "../src/lib/users";
+import { startTelegramBot, stopTelegramBot } from "../src/lib/telegram/bot";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -473,6 +474,11 @@ app.prepare().then(() => {
     console.log(`[recorder] swept ${sweep.deleted} expired recording(s)`);
   }
 
+  // Start the Telegram bot if env is configured. Safe no-op when not.
+  startTelegramBot().catch((err) => {
+    console.error("[telegram] startTelegramBot failed", err);
+  });
+
   server.listen(PORT, TERMINUS_HOST, () => {
     console.log(`TerminalX server ready on http://${TERMINUS_HOST}:${PORT}`);
     console.log(`  Host:       ${TERMINUS_HOST}`);
@@ -488,6 +494,7 @@ app.prepare().then(() => {
   // Graceful shutdown
   const shutdown = () => {
     console.log("\nShutting down...");
+    void stopTelegramBot();
     destroyAllPtys();
     destroyAllLogStreams();
     if (sharedWatcher) {

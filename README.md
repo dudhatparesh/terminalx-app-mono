@@ -23,6 +23,7 @@ One URL replaces your daily SSH workflow.
 - **Google OAuth** — Sign in with a whitelisted Google account
 - **Tailscale Ready** — Zero-config auth when used behind Tailscale
 - **Drag & Drop Upload** — Upload files directly to your server
+- **Telegram Bot** — Attach to your sessions from Telegram (one forum topic per session, inline keyboard, file transfer, Claude transcript streaming). See `.env.example` for setup.
 
 ## Quick Start
 
