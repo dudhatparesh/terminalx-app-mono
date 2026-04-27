@@ -1,6 +1,6 @@
 import { execFileSync } from "child_process";
 import type { Bot } from "grammy";
-import { hasSession, captureVisiblePane, isPaneTui } from "@/lib/tmux";
+import { hasSession, captureVisiblePane, isPaneTui, getSessionCreatedMs } from "@/lib/tmux";
 import { renderScreen, stripAnsi } from "./render";
 import { attachedKeyboard } from "./keyboard";
 import {
@@ -33,12 +33,12 @@ interface RuntimeState {
   tuiHinted: boolean;
 }
 
-/** Default view mode by session kind. */
-export function defaultViewMode(kind: string): ViewMode {
-  // claude has a richer JSONL transcript stream alongside the screen
-  // streamer; chat mode there hides the noisy code-block screen and
-  // shows just the formatted assistant / tool / thinking messages.
-  return kind === "claude" ? "chat" : "screen";
+/** Default view mode for a freshly-attached topic. */
+export function defaultViewMode(_kind: string): ViewMode {
+  // Chat reads like a normal conversation; for claude / codex topics it
+  // routes through the per-topic JSONL transcript so the user sees only
+  // the assistant's final replies.
+  return "chat";
 }
 
 const runtimes = new Map<number, RuntimeState>();
@@ -188,13 +188,27 @@ async function flushChat(
   ansi: string,
   rt: RuntimeState
 ): Promise<void> {
-  if (isPaneTui(sessionName)) {
+  // For sessions that the user explicitly created as kind=claude, always
+  // route through JSONL — regardless of what `pane_current_command`
+  // currently says. There's a race on first attach where the parent bash
+  // hasn't yet exec'd `claude`, and isPaneTui briefly returns false. We
+  // don't want the welcome banner of Claude Code dumped as raw chat text
+  // during that window.
+  const binding = getTopic(topicId);
+  const knownTui = binding?.kind === "claude" || binding?.kind === "codex";
+  if (knownTui || isPaneTui(sessionName)) {
     // TUI active. Try to wire up the JSONL transcript watcher; if a
     // recent claude session JSONL exists, the user will start seeing
     // formatted assistant / tool / thinking messages instead of the
     // raw screen redraws.
     if (!isClaudeTranscriptRunning(topicId)) {
-      const started = startClaudeTranscript(bot, chatId, topicId, 0);
+      const sinceMs = getSessionCreatedMs(sessionName) ?? Date.now();
+      const started = startClaudeTranscript(bot, chatId, topicId, {
+        cwd: binding?.cwd,
+        sinceMs,
+        persistedJsonl: binding?.jsonlPath,
+        initialOffset: binding?.jsonlOffset,
+      });
       if (started) {
         await patchTopic(topicId, { jsonlPath: started.jsonl });
         return;

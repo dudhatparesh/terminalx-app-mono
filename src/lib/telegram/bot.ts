@@ -1,7 +1,13 @@
 import { Bot, type Context } from "grammy";
-import { listSessions, createSession, killSession, hasSession } from "@/lib/tmux";
+import {
+  listSessions,
+  createSession,
+  killSession,
+  hasSession,
+  getSessionCreatedMs,
+  isPaneTui,
+} from "@/lib/tmux";
 import { canAccessSession, scopedSessionName } from "@/lib/session-scope";
-import { isPaneTui } from "@/lib/tmux";
 import { commandForKind, saveMeta, isValidKind, type SessionKind } from "@/lib/ai-sessions";
 import { resolveTelegramIdentity, botIsConfigured, type BotIdentity } from "./auth";
 import { sessionsKeyboard, CB } from "./keyboard";
@@ -31,6 +37,7 @@ import {
   startClaudeTranscript,
   stopClaudeTranscript,
   stopAllClaudeTranscripts,
+  readLastAssistantText,
 } from "./claude-transcript";
 import { downloadFromTelegram, sendFromServer } from "./files";
 
@@ -62,11 +69,50 @@ async function reply(ctx: Context, text: string, opts: Parameters<Context["reply
 async function attachToTopic(b: Bot, identity: BotIdentity, binding: TopicBinding): Promise<void> {
   const chatId = ctxChatId();
   if (!chatId) return;
-  await setTopic({ ...binding, viewMode: binding.viewMode ?? defaultViewMode(binding.kind) });
+  const mode = binding.viewMode ?? defaultViewMode(binding.kind);
+  await setTopic({ ...binding, viewMode: mode });
   startStreamer(b, binding.topicId);
+  let resolvedJsonl: string | undefined = binding.jsonlPath;
   if (binding.kind === "claude") {
-    const started = startClaudeTranscript(b, chatId, binding.topicId, binding.jsonlOffset);
-    if (started) await patchTopic(binding.topicId, { jsonlPath: started.jsonl });
+    const sinceMs = getSessionCreatedMs(binding.sessionName) ?? Date.now();
+    const started = startClaudeTranscript(b, chatId, binding.topicId, {
+      cwd: binding.cwd,
+      sinceMs,
+      persistedJsonl: binding.jsonlPath,
+      initialOffset: binding.jsonlOffset,
+    });
+    if (started) {
+      resolvedJsonl = started.jsonl;
+      await patchTopic(binding.topicId, { jsonlPath: started.jsonl });
+    }
+  }
+
+  // Welcome banner so the user sees the bot did something. /view to
+  // switch modes; /detach to stop streaming.
+  try {
+    await b.api.sendMessage(chatId, `📎 attached to ${binding.sessionName} · view: ${mode}`, {
+      message_thread_id: binding.topicId,
+    });
+  } catch {
+    /* ignore */
+  }
+
+  // For TUI sessions (claude, vim, …) the user starts in chat mode but
+  // would otherwise see nothing until the next assistant entry. Surface
+  // the most recent assistant message from the latest JSONL so they
+  // immediately have context for what was happening.
+  if (mode === "chat" && isPaneTui(binding.sessionName)) {
+    const last = readLastAssistantText(resolvedJsonl);
+    if (last) {
+      try {
+        await b.api.sendMessage(chatId, last, {
+          message_thread_id: binding.topicId,
+          parse_mode: "MarkdownV2",
+        });
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }
 
@@ -163,6 +209,13 @@ async function handleNew(ctx: Context) {
   });
 }
 
+/** Build a `https://t.me/c/<id>/<thread>` deep link for a topic. */
+function topicLink(chatId: number, topicId: number): string {
+  // Supergroup ids look like -100<rest>; the public link uses just <rest>.
+  const internal = String(chatId).replace(/^-100/, "");
+  return `https://t.me/c/${internal}/${topicId}`;
+}
+
 async function handleAttachByName(ctx: Context, name: string) {
   const identity = await gate(ctx);
   if (!identity) return;
@@ -175,13 +228,16 @@ async function handleAttachByName(ctx: Context, name: string) {
     await reply(ctx, `session ${name} not found.`);
     return;
   }
-  const existing = getTopicByName(name);
-  if (existing) {
-    await reply(ctx, `already bound to topic ${existing.topicId}.`);
-    return;
-  }
   const chatId = ctxChatId();
   if (!chatId) return;
+  const existing = getTopicByName(name);
+  if (existing) {
+    const url = topicLink(chatId, existing.topicId);
+    await reply(ctx, `already attached → ${url}`, {
+      link_preview_options: { is_disabled: true },
+    });
+    return;
+  }
   const topic = await bot.api.createForumTopic(chatId, name);
   await attachToTopic(bot, identity, {
     topicId: topic.message_thread_id,
@@ -532,7 +588,14 @@ export async function startTelegramBot(): Promise<Bot | null> {
   // resume any persisted topic streamers
   resumePersistedStreamers(bot);
   for (const t of listTopics()) {
-    if (t.kind === "claude") startClaudeTranscript(bot, forumChatId, t.topicId, t.jsonlOffset);
+    if (t.kind !== "claude") continue;
+    const sinceMs = getSessionCreatedMs(t.sessionName) ?? 0;
+    startClaudeTranscript(bot, forumChatId, t.topicId, {
+      cwd: t.cwd,
+      sinceMs,
+      persistedJsonl: t.jsonlPath,
+      initialOffset: t.jsonlOffset,
+    });
   }
   return bot;
 }
