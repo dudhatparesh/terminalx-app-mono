@@ -55,6 +55,21 @@ export function asCodeBlock(text: string, max = 3500): string {
 }
 
 /**
+ * Render a tmux `capture-pane -p -e` output as a Telegram-friendly code
+ * block. tmux pads each line with trailing spaces to the pane width and
+ * leaves a stack of blank rows below the prompt — both look terrible in
+ * Telegram's narrow code-block column. We strip ANSI, trim trailing
+ * spaces per line, drop blank trailing lines, then wrap.
+ */
+export function renderScreen(ansi: string, max = 3500): string {
+  const plain = stripAnsi(ansi);
+  const lines = plain.split("\n").map((l) => l.replace(/\s+$/, ""));
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const trimmed = lines.join("\n");
+  return asCodeBlock(trimmed, max);
+}
+
+/**
  * Split a MarkdownV2-formatted message into ≤4096-char chunks, preferring
  * newline boundaries and re-opening / closing code fences across splits so
  * each chunk is independently valid.

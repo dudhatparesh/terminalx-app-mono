@@ -281,12 +281,20 @@ async function handleText(ctx: Context) {
   if (!bot) return;
   const identity = await gate(ctx);
   if (!identity) return;
-  const topicId = ctx.message?.message_thread_id;
   const text = ctx.message?.text;
-  if (!topicId || !text) return;
-  if (text.startsWith("/")) return; // commands handled by their own hooks
+  if (!text || text.startsWith("/")) return; // commands handled by their own hooks
+  const topicId = ctx.message?.message_thread_id;
+  if (!topicId) {
+    // User typed in the General topic. The bot doesn't forward text from
+    // there — give a small hint so they know what to do.
+    await reply(ctx, "type inside a session topic to send to its terminal. /sessions to list.");
+    return;
+  }
   const binding = getTopic(topicId);
-  if (!binding) return;
+  if (!binding) {
+    await reply(ctx, "this topic isn't bound to a session anymore.");
+    return;
+  }
   sendText(binding.sessionName, text, true);
   setTimeout(() => snap(bot!, topicId), 250);
 }
@@ -444,6 +452,10 @@ export async function startTelegramBot(): Promise<Bot | null> {
   // inline keyboard
   bot.on("callback_query:data", handleCallback);
 
+  // grammy needs bot.init() to fetch its own info before handleUpdate works
+  // when we're driving updates ourselves (webhook mode without bot.start()).
+  await bot.init();
+
   // remember the configured forum chat id so other modules can reach it
   const forumChatId = Number(process.env.TERMINALX_TELEGRAM_FORUM_CHAT_ID);
   if (Number.isFinite(forumChatId)) await setForumChatId(forumChatId);
@@ -473,6 +485,23 @@ export async function startTelegramBot(): Promise<Bot | null> {
 /** Hand a parsed Telegram update from the webhook into the bot. */
 export async function handleTelegramUpdate(update: object): Promise<void> {
   if (!bot) return;
+  // TEMP debug — log enough to triage why /start does nothing.
+  try {
+    const u = update as {
+      update_id?: number;
+      message?: {
+        from?: { id?: number; username?: string };
+        chat?: { id?: number; type?: string };
+        text?: string;
+      };
+    };
+    const m = u.message;
+    console.log(
+      `[telegram] update id=${u.update_id} chat=${m?.chat?.id}/${m?.chat?.type} from=${m?.from?.id}/@${m?.from?.username} text=${JSON.stringify(m?.text)}`
+    );
+  } catch {
+    /* ignore */
+  }
   await bot.handleUpdate(update as Parameters<Bot["handleUpdate"]>[0]);
 }
 

@@ -34,6 +34,24 @@ export function capturePaneHistory(name: string, lines = 10000): string {
 }
 
 /**
+ * Capture only the *visible* pane — the live screen the user would see if
+ * they were attached. No history padding, no scrollback. Used by the
+ * Telegram streamer to render a screen snapshot every few seconds.
+ */
+export function captureVisiblePane(name: string): string {
+  const safeName = sanitizeSessionName(name);
+  try {
+    return execFileSync(TMUX_BIN, ["capture-pane", "-p", "-e", "-J", "-t", safeName], {
+      encoding: "utf-8",
+      timeout: 5000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Raise tmux's per-session scrollback limit for any session the server
  * creates from now on. Runs at server startup; also invoked defensively
  * from createSession. Failures are ignored (e.g. no tmux server running

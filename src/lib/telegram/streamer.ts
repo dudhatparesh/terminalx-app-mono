@@ -1,7 +1,7 @@
 import { execFileSync } from "child_process";
 import type { Bot } from "grammy";
-import { hasSession, capturePaneHistory } from "@/lib/tmux";
-import { asCodeBlock } from "./render";
+import { hasSession, captureVisiblePane } from "@/lib/tmux";
+import { renderScreen } from "./render";
 import { attachedKeyboard } from "./keyboard";
 import { getTopic, listTopics, patchTopic, deleteTopic, getForumChatId } from "./state";
 
@@ -88,9 +88,9 @@ async function renderAndFlush(bot: Bot, topicId: number): Promise<void> {
 
   rt.flushBusy = true;
   try {
-    const ansi = capturePaneHistory(binding.sessionName, 50);
+    const ansi = captureVisiblePane(binding.sessionName);
     if (!ansi) return;
-    const rendered = asCodeBlock(ansi);
+    const rendered = renderScreen(ansi);
     if (rendered === rt.lastRendered) return;
 
     const tryEdit = async (msgId: number) => {

@@ -28,7 +28,7 @@ import { startRecorder, sweepExpiredRecordings } from "../src/lib/session-record
 import { verifyJwt, parseCookies } from "../src/lib/auth";
 import { getAuthMode } from "../src/lib/auth-config";
 import { ensureDefaultAdmin } from "../src/lib/users";
-import { startTelegramBot, stopTelegramBot } from "../src/lib/telegram/bot";
+import { startTelegramBot, stopTelegramBot, handleTelegramUpdate } from "../src/lib/telegram/bot";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -397,6 +397,40 @@ app.prepare().then(() => {
     if (parsedUrl.pathname === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+
+    // Telegram webhook is handled here, in the same module instance that
+    // owns the grammy `Bot`. If we let it fall through to Next.js, the
+    // route handler runs in a separately-bundled module where the bot
+    // reference is null and updates are silently dropped.
+    if (parsedUrl.pathname === "/api/telegram/webhook" && req.method === "POST") {
+      const expected = process.env.TERMINALX_TELEGRAM_WEBHOOK_SECRET;
+      const got = req.headers["x-telegram-bot-api-secret-token"];
+      if (!expected || got !== expected) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        try {
+          const update = JSON.parse(body) as object;
+          // Process async — ack within Telegram's 2 s window. Log only
+          // err.message so we don't recursively stringify grammy's
+          // BotError, which contains a `ctx.bot` ref that exposes the token.
+          void handleTelegramUpdate(update).catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error("[telegram/webhook] handleUpdate failed:", msg);
+          });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true }));
+        } catch {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "invalid json" }));
+        }
+      });
       return;
     }
 
