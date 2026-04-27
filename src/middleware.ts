@@ -25,6 +25,9 @@ const PUBLIC_PATHS = [
   "/api/auth/google",
   "/api/auth/google/callback",
   "/api/health",
+  // Telegram webhook is gated by its own secret-token header check inside
+  // the route handler, so we let it through middleware.
+  "/api/telegram/webhook",
   "/_next/",
   "/favicon.ico",
 ];

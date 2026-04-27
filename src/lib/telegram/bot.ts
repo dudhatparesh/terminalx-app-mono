@@ -1,0 +1,493 @@
+import { Bot, type Context } from "grammy";
+import { listSessions, createSession, killSession, hasSession } from "@/lib/tmux";
+import { canAccessSession, scopedSessionName } from "@/lib/session-scope";
+import { commandForKind, saveMeta, isValidKind, type SessionKind } from "@/lib/ai-sessions";
+import { resolveTelegramIdentity, botIsConfigured, type BotIdentity } from "./auth";
+import { sessionsKeyboard, CB } from "./keyboard";
+import {
+  setTopic,
+  deleteTopic,
+  getTopic,
+  getTopicByName,
+  listTopics,
+  setForumChatId,
+  patchTopic,
+  type TopicBinding,
+} from "./state";
+import {
+  startStreamer,
+  stopStreamer,
+  stopAllStreamers,
+  resumePersistedStreamers,
+  sendKey,
+  sendText,
+  scroll,
+  snap,
+} from "./streamer";
+import {
+  startClaudeTranscript,
+  stopClaudeTranscript,
+  stopAllClaudeTranscripts,
+} from "./claude-transcript";
+import { downloadFromTelegram, sendFromServer } from "./files";
+
+let bot: Bot | null = null;
+
+/**
+ * Resolve the Telegram identity for the user behind a Context, OR null if
+ * they're not on the allowlist or the chat isn't the configured forum.
+ */
+async function gate(ctx: Context): Promise<BotIdentity | null> {
+  const tgId = ctx.from?.id;
+  const chatId = ctx.chat?.id;
+  if (!tgId || !chatId) return null;
+  const expected = Number(process.env.TERMINALX_TELEGRAM_FORUM_CHAT_ID);
+  if (expected && chatId !== expected) return null;
+  const identity = await resolveTelegramIdentity(tgId);
+  if (!identity) return null;
+  return identity;
+}
+
+async function reply(ctx: Context, text: string, opts: Parameters<Context["reply"]>[1] = {}) {
+  try {
+    await ctx.reply(text, { ...opts });
+  } catch (err) {
+    console.error("[telegram/bot] reply failed", err);
+  }
+}
+
+async function attachToTopic(b: Bot, identity: BotIdentity, binding: TopicBinding): Promise<void> {
+  const chatId = ctxChatId();
+  if (!chatId) return;
+  await setTopic(binding);
+  startStreamer(b, binding.topicId);
+  if (binding.kind === "claude") {
+    const started = startClaudeTranscript(b, chatId, binding.topicId, binding.jsonlOffset);
+    if (started) await patchTopic(binding.topicId, { jsonlPath: started.jsonl });
+  }
+}
+
+function ctxChatId(): number | null {
+  const expected = Number(process.env.TERMINALX_TELEGRAM_FORUM_CHAT_ID);
+  return Number.isFinite(expected) ? expected : null;
+}
+
+/* ────────────── command handlers ────────────── */
+
+async function handleStart(ctx: Context) {
+  const identity = await gate(ctx);
+  if (!identity) return;
+  await reply(
+    ctx,
+    [
+      "terminalx bot online.",
+      "",
+      "/sessions — list sessions",
+      "/new <name> [bash|claude|codex] — create + attach in a new topic",
+      "",
+      "inside a session topic:",
+      "  • text → stdin",
+      "  • reply with a file → upload to session cwd",
+      "  • /snap, /detach, /kill, /get <relpath>",
+      "  • inline keyboard: ^C ^D Tab ↵ arrows scroll snap detach kill",
+    ].join("\n")
+  );
+}
+
+async function handleSessions(ctx: Context) {
+  const identity = await gate(ctx);
+  if (!identity) return;
+  const all = listSessions().filter((s) =>
+    canAccessSession(identity.username, identity.role, s.name)
+  );
+  if (all.length === 0) {
+    await reply(ctx, "no sessions. the box is lonely.");
+    return;
+  }
+  await ctx.reply(`${all.length} session${all.length === 1 ? "" : "s"}:`, {
+    reply_markup: sessionsKeyboard(all),
+  });
+}
+
+async function handleNew(ctx: Context) {
+  const identity = await gate(ctx);
+  if (!identity) return;
+  if (!bot) return;
+  const text = ctx.message?.text ?? "";
+  const args = text.split(/\s+/).slice(1);
+  const rawName = (args[0] ?? "").toLowerCase();
+  const kindRaw = args[1] ?? "bash";
+  const kind: SessionKind = isValidKind(kindRaw) ? (kindRaw as SessionKind) : "bash";
+  if (!rawName || !/^[a-zA-Z0-9_.\-]+$/.test(rawName)) {
+    await reply(ctx, "usage: /new <name> [bash|claude|codex]");
+    return;
+  }
+  const scoped = scopedSessionName(rawName, identity.username);
+  if (hasSession(scoped)) {
+    await reply(ctx, `session ${scoped} already exists.`);
+    return;
+  }
+  const cwd = process.env.TERMINUS_ROOT || process.env.HOME || "/";
+  const cmd = commandForKind(kind);
+  try {
+    createSession(scoped, cmd ?? undefined, cwd);
+    await saveMeta({ name: scoped, kind, createdAt: new Date().toISOString() });
+  } catch (err) {
+    await reply(ctx, `failed to create: ${(err as Error).message}`);
+    return;
+  }
+
+  const chatId = ctxChatId();
+  if (!chatId) {
+    await reply(ctx, "no forum chat configured.");
+    return;
+  }
+  let topicId: number;
+  try {
+    const topic = await bot.api.createForumTopic(chatId, scoped);
+    topicId = topic.message_thread_id;
+  } catch (err) {
+    await reply(ctx, `failed to create topic: ${(err as Error).message}`);
+    return;
+  }
+
+  await attachToTopic(bot, identity, {
+    topicId,
+    sessionName: scoped,
+    kind,
+    cwd,
+  });
+}
+
+async function handleAttachByName(ctx: Context, name: string) {
+  const identity = await gate(ctx);
+  if (!identity) return;
+  if (!bot) return;
+  if (!canAccessSession(identity.username, identity.role, name)) {
+    await reply(ctx, "session not yours.");
+    return;
+  }
+  if (!hasSession(name)) {
+    await reply(ctx, `session ${name} not found.`);
+    return;
+  }
+  const existing = getTopicByName(name);
+  if (existing) {
+    await reply(ctx, `already bound to topic ${existing.topicId}.`);
+    return;
+  }
+  const chatId = ctxChatId();
+  if (!chatId) return;
+  const topic = await bot.api.createForumTopic(chatId, name);
+  await attachToTopic(bot, identity, {
+    topicId: topic.message_thread_id,
+    sessionName: name,
+    kind: "bash", // best-effort default; metadata could refine
+    cwd: process.env.TERMINUS_ROOT || process.env.HOME || "/",
+  });
+}
+
+async function handleDetach(ctx: Context) {
+  const identity = await gate(ctx);
+  if (!identity) return;
+  const topicId = ctx.message?.message_thread_id;
+  if (!topicId) return;
+  await stopStreamer(topicId);
+  stopClaudeTranscript(topicId);
+  await deleteTopic(topicId);
+  await reply(ctx, "detached. tmux session is still running.");
+}
+
+async function handleKill(ctx: Context) {
+  const identity = await gate(ctx);
+  if (!identity) return;
+  if (!bot) return;
+  const topicId = ctx.message?.message_thread_id;
+  let target = ctx.message?.text?.split(/\s+/)[1];
+  if (!target && topicId) {
+    target = getTopic(topicId)?.sessionName;
+  }
+  if (!target) {
+    await reply(ctx, "usage: /kill <name> (or run inside a session topic)");
+    return;
+  }
+  if (!canAccessSession(identity.username, identity.role, target)) {
+    await reply(ctx, "session not yours.");
+    return;
+  }
+  try {
+    killSession(target);
+  } catch (err) {
+    await reply(ctx, `failed: ${(err as Error).message}`);
+    return;
+  }
+  if (topicId) {
+    await stopStreamer(topicId);
+    stopClaudeTranscript(topicId);
+    await deleteTopic(topicId);
+    const chatId = ctxChatId();
+    if (chatId) {
+      try {
+        await bot.api.closeForumTopic(chatId, topicId);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  await reply(ctx, `killed ${target}.`);
+}
+
+async function handleSnap(ctx: Context) {
+  if (!bot) return;
+  const identity = await gate(ctx);
+  if (!identity) return;
+  const topicId = ctx.message?.message_thread_id;
+  if (!topicId) return;
+  snap(bot, topicId);
+}
+
+async function handleGet(ctx: Context) {
+  if (!bot) return;
+  const identity = await gate(ctx);
+  if (!identity) return;
+  const topicId = ctx.message?.message_thread_id;
+  const chatId = ctxChatId();
+  if (!topicId || !chatId) return;
+  const arg = ctx.message?.text?.split(/\s+/).slice(1).join(" ").trim();
+  if (!arg) {
+    await reply(ctx, "usage: /get <relpath>");
+    return;
+  }
+  try {
+    await sendFromServer(bot, chatId, topicId, arg);
+  } catch (err) {
+    await reply(ctx, `couldn't send: ${(err as Error).message}`);
+  }
+}
+
+async function handleSlashKey(ctx: Context, key: string) {
+  const identity = await gate(ctx);
+  if (!identity) return;
+  if (!bot) return;
+  const topicId = ctx.message?.message_thread_id;
+  if (!topicId) return;
+  const binding = getTopic(topicId);
+  if (!binding) return;
+  sendKey(binding.sessionName, key);
+  setTimeout(() => snap(bot!, topicId), 250);
+}
+
+async function handleText(ctx: Context) {
+  if (!bot) return;
+  const identity = await gate(ctx);
+  if (!identity) return;
+  const topicId = ctx.message?.message_thread_id;
+  const text = ctx.message?.text;
+  if (!topicId || !text) return;
+  if (text.startsWith("/")) return; // commands handled by their own hooks
+  const binding = getTopic(topicId);
+  if (!binding) return;
+  sendText(binding.sessionName, text, true);
+  setTimeout(() => snap(bot!, topicId), 250);
+}
+
+async function handleFileUpload(ctx: Context) {
+  if (!bot) return;
+  const identity = await gate(ctx);
+  if (!identity) return;
+  const topicId = ctx.message?.message_thread_id;
+  if (!topicId) return;
+  const binding = getTopic(topicId);
+  if (!binding) return;
+
+  const photo = ctx.message?.photo?.[ctx.message.photo.length - 1];
+  const document = ctx.message?.document;
+  const fileId = photo?.file_id ?? document?.file_id;
+  if (!fileId) return;
+  const preferredName =
+    document?.file_name ?? (photo ? `photo-${photo.file_unique_id}.jpg` : undefined);
+  try {
+    const out = await downloadFromTelegram(bot, fileId, binding.cwd, preferredName);
+    await reply(ctx, `saved → ${out.savedTo} (${out.bytes} bytes)`);
+  } catch (err) {
+    await reply(ctx, `upload failed: ${(err as Error).message}`);
+  }
+}
+
+async function handleCallback(ctx: Context) {
+  if (!bot) return;
+  const identity = await gate(ctx);
+  if (!identity) {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  const data = ctx.callbackQuery?.data ?? "";
+  const topicId = ctx.callbackQuery?.message?.message_thread_id;
+  await ctx.answerCallbackQuery();
+
+  // attach / kill from /sessions list
+  if (data.startsWith(CB.ATTACH_PREFIX)) {
+    await handleAttachByName(ctx, data.slice(CB.ATTACH_PREFIX.length));
+    return;
+  }
+  if (data.startsWith(CB.KILL_PREFIX)) {
+    const name = data.slice(CB.KILL_PREFIX.length);
+    if (!canAccessSession(identity.username, identity.role, name)) return;
+    try {
+      killSession(name);
+    } catch {
+      /* ignore */
+    }
+    const t = getTopicByName(name);
+    if (t) {
+      await stopStreamer(t.topicId);
+      stopClaudeTranscript(t.topicId);
+      await deleteTopic(t.topicId);
+    }
+    return;
+  }
+
+  // attached-mode keyboard
+  if (!topicId) return;
+  const binding = getTopic(topicId);
+  if (!binding) return;
+  const session = binding.sessionName;
+  switch (data) {
+    case CB.CTRL_C:
+      sendKey(session, "C-c");
+      break;
+    case CB.CTRL_D:
+      sendKey(session, "C-d");
+      break;
+    case CB.TAB:
+      sendKey(session, "Tab");
+      break;
+    case CB.ENTER:
+      sendKey(session, "Enter");
+      break;
+    case CB.UP:
+      sendKey(session, "Up");
+      break;
+    case CB.DOWN:
+      sendKey(session, "Down");
+      break;
+    case CB.LEFT:
+      sendKey(session, "Left");
+      break;
+    case CB.RIGHT:
+      sendKey(session, "Right");
+      break;
+    case CB.SCROLL_UP:
+      scroll(session, "up");
+      break;
+    case CB.SCROLL_DOWN:
+      scroll(session, "down");
+      break;
+    case CB.SNAP:
+      // handled below
+      break;
+    case CB.DETACH:
+      await stopStreamer(topicId);
+      stopClaudeTranscript(topicId);
+      await deleteTopic(topicId);
+      await reply(ctx, "detached.");
+      return;
+    case CB.KILL:
+      try {
+        killSession(session);
+      } catch {
+        /* ignore */
+      }
+      await stopStreamer(topicId);
+      stopClaudeTranscript(topicId);
+      await deleteTopic(topicId);
+      const chatId = ctxChatId();
+      if (chatId) {
+        try {
+          await bot.api.closeForumTopic(chatId, topicId);
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+  }
+  setTimeout(() => snap(bot!, topicId), 250);
+}
+
+/* ────────────── lifecycle ────────────── */
+
+export async function startTelegramBot(): Promise<Bot | null> {
+  if (!botIsConfigured()) return null;
+  if (bot) return bot;
+  const token = process.env.TERMINALX_TELEGRAM_BOT_TOKEN!;
+  bot = new Bot(token);
+
+  // commands
+  bot.command("start", handleStart);
+  bot.command("sessions", handleSessions);
+  bot.command("new", handleNew);
+  bot.command("detach", handleDetach);
+  bot.command("kill", handleKill);
+  bot.command("snap", handleSnap);
+  bot.command("get", handleGet);
+  bot.command("tab", (ctx) => handleSlashKey(ctx, "Tab"));
+  bot.command("enter", (ctx) => handleSlashKey(ctx, "Enter"));
+  bot.command("ctrlc", (ctx) => handleSlashKey(ctx, "C-c"));
+  bot.command("ctrld", (ctx) => handleSlashKey(ctx, "C-d"));
+  bot.command("up", (ctx) => handleSlashKey(ctx, "Up"));
+  bot.command("down", (ctx) => handleSlashKey(ctx, "Down"));
+
+  // text & file uploads inside topics
+  bot.on("message:text", handleText);
+  bot.on(["message:photo", "message:document"], handleFileUpload);
+
+  // inline keyboard
+  bot.on("callback_query:data", handleCallback);
+
+  // remember the configured forum chat id so other modules can reach it
+  const forumChatId = Number(process.env.TERMINALX_TELEGRAM_FORUM_CHAT_ID);
+  if (Number.isFinite(forumChatId)) await setForumChatId(forumChatId);
+
+  // webhook setup
+  const webhookUrl = process.env.TERMINALX_TELEGRAM_WEBHOOK_URL;
+  const secret = process.env.TERMINALX_TELEGRAM_WEBHOOK_SECRET;
+  if (!webhookUrl || !secret) {
+    console.error("[telegram] webhook url / secret missing — bot won't receive updates");
+    return bot;
+  }
+  try {
+    await bot.api.setWebhook(webhookUrl, { secret_token: secret });
+    console.log(`[telegram] webhook set ${webhookUrl}`);
+  } catch (err) {
+    console.error("[telegram] setWebhook failed", err);
+  }
+
+  // resume any persisted topic streamers
+  resumePersistedStreamers(bot);
+  for (const t of listTopics()) {
+    if (t.kind === "claude") startClaudeTranscript(bot, forumChatId, t.topicId, t.jsonlOffset);
+  }
+  return bot;
+}
+
+/** Hand a parsed Telegram update from the webhook into the bot. */
+export async function handleTelegramUpdate(update: object): Promise<void> {
+  if (!bot) return;
+  await bot.handleUpdate(update as Parameters<Bot["handleUpdate"]>[0]);
+}
+
+export async function stopTelegramBot(): Promise<void> {
+  if (!bot) return;
+  stopAllStreamers();
+  stopAllClaudeTranscripts();
+  try {
+    await bot.api.deleteWebhook();
+  } catch {
+    /* ignore */
+  }
+  bot = null;
+}
+
+export function getBot(): Bot | null {
+  return bot;
+}
