@@ -8,6 +8,8 @@ import type { SessionKind } from "@/lib/ai-sessions";
  * Survives server restarts so reattaching after a deploy doesn't lose
  * topic ↔ session mapping.
  */
+export type ViewMode = "screen" | "chat";
+
 export interface TopicBinding {
   topicId: number;
   sessionName: string;
@@ -16,6 +18,8 @@ export interface TopicBinding {
   jsonlPath?: string;
   jsonlOffset?: number;
   pinnedMsgId?: number;
+  /** screen = pinned code-block edits; chat = each new chunk as its own msg. */
+  viewMode?: ViewMode;
 }
 
 interface StateFile {

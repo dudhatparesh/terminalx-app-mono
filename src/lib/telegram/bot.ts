@@ -23,6 +23,8 @@ import {
   sendText,
   scroll,
   snap,
+  defaultViewMode,
+  resetChatBaseline,
 } from "./streamer";
 import {
   startClaudeTranscript,
@@ -59,7 +61,7 @@ async function reply(ctx: Context, text: string, opts: Parameters<Context["reply
 async function attachToTopic(b: Bot, identity: BotIdentity, binding: TopicBinding): Promise<void> {
   const chatId = ctxChatId();
   if (!chatId) return;
-  await setTopic(binding);
+  await setTopic({ ...binding, viewMode: binding.viewMode ?? defaultViewMode(binding.kind) });
   startStreamer(b, binding.topicId);
   if (binding.kind === "claude") {
     const started = startClaudeTranscript(b, chatId, binding.topicId, binding.jsonlOffset);
@@ -89,7 +91,8 @@ async function handleStart(ctx: Context) {
       "  • text → stdin",
       "  • reply with a file → upload to session cwd",
       "  • /snap, /detach, /kill, /get <relpath>",
-      "  • inline keyboard: ^C ^D Tab ↵ arrows scroll snap detach kill",
+      "  • /view [screen|chat] — toggle pinned-screen vs message-stream view",
+      "  • inline keyboard: ^C ^D Tab ↵ arrows scroll snap view detach kill",
     ].join("\n")
   );
 }
@@ -246,6 +249,36 @@ async function handleSnap(ctx: Context) {
   snap(bot, topicId);
 }
 
+async function toggleView(topicId: number): Promise<"screen" | "chat"> {
+  const binding = getTopic(topicId);
+  if (!binding) return "screen";
+  const current = binding.viewMode ?? defaultViewMode(binding.kind);
+  const next: "screen" | "chat" = current === "screen" ? "chat" : "screen";
+  await patchTopic(topicId, { viewMode: next });
+  // Reset baseline so chat mode doesn't dump the entire screen on switch.
+  resetChatBaseline(topicId);
+  return next;
+}
+
+async function handleView(ctx: Context) {
+  if (!bot) return;
+  const identity = await gate(ctx);
+  if (!identity) return;
+  const topicId = ctx.message?.message_thread_id;
+  if (!topicId) return;
+  const arg = (ctx.message?.text?.split(/\s+/)[1] ?? "").toLowerCase();
+  if (arg === "screen" || arg === "chat") {
+    await patchTopic(topicId, { viewMode: arg });
+    resetChatBaseline(topicId);
+    await reply(ctx, `view: ${arg}`);
+    if (bot) snap(bot, topicId);
+    return;
+  }
+  const next = await toggleView(topicId);
+  await reply(ctx, `view: ${next}`);
+  if (bot) snap(bot, topicId);
+}
+
 async function handleGet(ctx: Context) {
   if (!bot) return;
   const identity = await gate(ctx);
@@ -394,6 +427,12 @@ async function handleCallback(ctx: Context) {
     case CB.SNAP:
       // handled below
       break;
+    case CB.VIEW: {
+      const next = await toggleView(topicId);
+      await ctx.answerCallbackQuery({ text: `view: ${next}` });
+      if (bot) snap(bot, topicId);
+      return;
+    }
     case CB.DETACH:
       await stopStreamer(topicId);
       stopClaudeTranscript(topicId);
@@ -437,6 +476,7 @@ export async function startTelegramBot(): Promise<Bot | null> {
   bot.command("detach", handleDetach);
   bot.command("kill", handleKill);
   bot.command("snap", handleSnap);
+  bot.command("view", handleView);
   bot.command("get", handleGet);
   bot.command("tab", (ctx) => handleSlashKey(ctx, "Tab"));
   bot.command("enter", (ctx) => handleSlashKey(ctx, "Enter"));

@@ -1,9 +1,16 @@
 import { execFileSync } from "child_process";
 import type { Bot } from "grammy";
 import { hasSession, captureVisiblePane } from "@/lib/tmux";
-import { renderScreen } from "./render";
+import { asCodeBlock, renderScreen, stripAnsi } from "./render";
 import { attachedKeyboard } from "./keyboard";
-import { getTopic, listTopics, patchTopic, deleteTopic, getForumChatId } from "./state";
+import {
+  getTopic,
+  listTopics,
+  patchTopic,
+  deleteTopic,
+  getForumChatId,
+  type ViewMode,
+} from "./state";
 
 const FLUSH_INTERVAL_MS = 5000;
 const TMUX = "tmux";
@@ -16,8 +23,19 @@ interface RuntimeState {
   topicId: number;
   flushTimer: NodeJS.Timeout;
   flushBusy: boolean;
+  /** Last rendered code-block (screen mode), used to dedup edits. */
   lastRendered: string;
+  /** Last plain-text screen we've already sent (chat mode), used for diffs. */
+  lastSentText: string;
   lastFlushAt: number;
+}
+
+/** Default view mode by session kind. */
+export function defaultViewMode(kind: string): ViewMode {
+  // claude has a richer JSONL transcript stream alongside the screen
+  // streamer; chat mode there hides the noisy code-block screen and
+  // shows just the formatted assistant / tool / thinking messages.
+  return kind === "claude" ? "chat" : "screen";
 }
 
 const runtimes = new Map<number, RuntimeState>();
@@ -60,9 +78,9 @@ export function scroll(sessionName: string, action: "up" | "down" | "cancel"): v
 }
 
 /**
- * Render the live screen for a topic and edit the pinned message. If the
- * pinned message has been deleted by the user (or never existed), send a
- * fresh one and store the new id.
+ * Render the live screen for a topic in screen mode (pinned-message edit) or
+ * chat mode (incremental new-line messages). Detaches the topic if the tmux
+ * session has gone away.
  */
 async function renderAndFlush(bot: Bot, topicId: number): Promise<void> {
   const rt = runtimes.get(topicId);
@@ -90,45 +108,118 @@ async function renderAndFlush(bot: Bot, topicId: number): Promise<void> {
   try {
     const ansi = captureVisiblePane(binding.sessionName);
     if (!ansi) return;
-    const rendered = renderScreen(ansi);
-    if (rendered === rt.lastRendered) return;
-
-    const tryEdit = async (msgId: number) => {
-      await bot.api.editMessageText(chatId, msgId, rendered, {
-        parse_mode: "MarkdownV2",
-        reply_markup: attachedKeyboard(),
-      });
-    };
-
-    if (binding.pinnedMsgId) {
-      try {
-        await tryEdit(binding.pinnedMsgId);
-        rt.lastRendered = rendered;
-        rt.lastFlushAt = Date.now();
-        return;
-      } catch (err) {
-        const desc = String((err as { description?: string })?.description ?? err);
-        if (desc.includes("message is not modified")) {
-          rt.lastRendered = rendered;
-          return;
-        }
-        // fall through to send a new pinned message
-      }
+    const mode = binding.viewMode ?? defaultViewMode(binding.kind);
+    if (mode === "chat") {
+      await flushChat(bot, chatId, topicId, binding.sessionName, ansi, rt);
+    } else {
+      await flushScreen(bot, chatId, topicId, binding.pinnedMsgId, ansi, rt);
     }
-
-    const sent = await bot.api.sendMessage(chatId, rendered, {
-      parse_mode: "MarkdownV2",
-      message_thread_id: topicId,
-      reply_markup: attachedKeyboard(),
-    });
-    await patchTopic(topicId, { pinnedMsgId: sent.message_id });
-    rt.lastRendered = rendered;
     rt.lastFlushAt = Date.now();
   } catch (err) {
-    console.error("[telegram/streamer] flush failed", err);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[telegram/streamer] flush failed:", msg);
   } finally {
     rt.flushBusy = false;
   }
+}
+
+/**
+ * screen mode — edit the pinned code-block message every flush. If the
+ * pinned message has been deleted by the user, send a fresh one.
+ */
+async function flushScreen(
+  bot: Bot,
+  chatId: number,
+  topicId: number,
+  pinnedMsgId: number | undefined,
+  ansi: string,
+  rt: RuntimeState
+): Promise<void> {
+  const rendered = renderScreen(ansi);
+  if (rendered === rt.lastRendered) return;
+
+  if (pinnedMsgId) {
+    try {
+      await bot.api.editMessageText(chatId, pinnedMsgId, rendered, {
+        parse_mode: "MarkdownV2",
+        reply_markup: attachedKeyboard(),
+      });
+      rt.lastRendered = rendered;
+      return;
+    } catch (err) {
+      const desc = String((err as { description?: string })?.description ?? err);
+      if (desc.includes("message is not modified")) {
+        rt.lastRendered = rendered;
+        return;
+      }
+      // fall through to send a fresh pinned message
+    }
+  }
+
+  const sent = await bot.api.sendMessage(chatId, rendered, {
+    parse_mode: "MarkdownV2",
+    message_thread_id: topicId,
+    reply_markup: attachedKeyboard(),
+  });
+  await patchTopic(topicId, { pinnedMsgId: sent.message_id });
+  rt.lastRendered = rendered;
+}
+
+/**
+ * chat mode — diff the visible screen against what we last sent and post
+ * only the new lines as a fresh message. The first flush after a switch
+ * just establishes a baseline (no message). The inline keyboard rides on
+ * the latest message so the buttons are always reachable.
+ */
+async function flushChat(
+  bot: Bot,
+  chatId: number,
+  topicId: number,
+  _sessionName: string,
+  ansi: string,
+  rt: RuntimeState
+): Promise<void> {
+  const text = stripAnsi(ansi)
+    .split("\n")
+    .map((l) => l.replace(/\s+$/, ""))
+    .filter((_, i, arr) => i < arr.length - 1 || arr[arr.length - 1] !== "")
+    .join("\n");
+
+  // First flush in chat mode: baseline only, don't post anything.
+  if (rt.lastSentText === "") {
+    rt.lastSentText = text;
+    return;
+  }
+  if (text === rt.lastSentText) return;
+
+  const newLines = diffNewLines(rt.lastSentText, text);
+  rt.lastSentText = text;
+  if (newLines.length === 0) return;
+
+  const body = asCodeBlock(newLines.join("\n"));
+  await bot.api.sendMessage(chatId, body, {
+    parse_mode: "MarkdownV2",
+    message_thread_id: topicId,
+    reply_markup: attachedKeyboard(),
+  });
+}
+
+/**
+ * Lightweight LCS-style diff: skip the longest common prefix between the
+ * old and new screens, then everything in `next` past the divergence is
+ * "new" content. Imperfect (it can't handle overwrites or scrollback
+ * eviction perfectly), but works well enough for "user types a command,
+ * see the new lines after the prompt".
+ */
+function diffNewLines(prev: string, next: string): string[] {
+  const a = prev.split("\n");
+  const b = next.split("\n");
+  // Skip the common prefix.
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  // Cap the message size — never spam more than 50 lines per flush even
+  // if the diff is huge (e.g. screen cleared + redrawn).
+  return b.slice(Math.max(i, b.length - 50));
 }
 
 /** Start (or restart) the 5s flush timer for a topic. */
@@ -138,6 +229,7 @@ export function startStreamer(bot: Bot, topicId: number): void {
     topicId,
     flushBusy: false,
     lastRendered: "",
+    lastSentText: "",
     lastFlushAt: 0,
     flushTimer: setInterval(() => {
       void renderAndFlush(bot, topicId);
@@ -146,6 +238,12 @@ export function startStreamer(bot: Bot, topicId: number): void {
   runtimes.set(topicId, rt);
   // Fire the first flush right away so the user sees something <5s.
   void renderAndFlush(bot, topicId);
+}
+
+/** Reset the chat-mode baseline so the next flush establishes a new one. */
+export function resetChatBaseline(topicId: number): void {
+  const rt = runtimes.get(topicId);
+  if (rt) rt.lastSentText = "";
 }
 
 /** Force a flush now (used by `/snap` and after key/scroll input). */
