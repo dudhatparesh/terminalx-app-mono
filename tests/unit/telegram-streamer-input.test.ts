@@ -11,10 +11,29 @@ describe("telegram streamer input", () => {
     execFileSync.mockReset();
   });
 
-  it("sends Telegram text followed by Enter to the exact tmux session", async () => {
+  it("sends generic Telegram text followed by Enter to the exact tmux session", async () => {
     const { sendText } = await import("@/lib/telegram/streamer");
 
-    sendText("codex-a", "hello codex", true);
+    sendText("shell-a", "hello shell", true);
+
+    expect(execFileSync).toHaveBeenNthCalledWith(
+      1,
+      "tmux",
+      ["send-keys", "-t", "=shell-a:", "-l", "hello shell"],
+      { timeout: 2000 }
+    );
+    expect(execFileSync).toHaveBeenNthCalledWith(
+      2,
+      "tmux",
+      ["send-keys", "-t", "=shell-a:", "Enter"],
+      { timeout: 2000 }
+    );
+  });
+
+  it("submits Codex Telegram text with Ctrl-M instead of Enter", async () => {
+    const { sendCodexText } = await import("@/lib/telegram/streamer");
+
+    sendCodexText("codex-a", "hello codex");
 
     expect(execFileSync).toHaveBeenNthCalledWith(
       1,
@@ -25,7 +44,7 @@ describe("telegram streamer input", () => {
     expect(execFileSync).toHaveBeenNthCalledWith(
       2,
       "tmux",
-      ["send-keys", "-t", "=codex-a:", "Enter"],
+      ["send-keys", "-t", "=codex-a:", "C-m"],
       { timeout: 2000 }
     );
   });

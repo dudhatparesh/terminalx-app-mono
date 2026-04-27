@@ -67,6 +67,12 @@ export function sendText(sessionName: string, text: string, withEnter = true): v
   if (withEnter) tmuxSend(sessionName, ["Enter"]);
 }
 
+/** Codex uses Enter for composer newlines; Ctrl-M submits the prompt. */
+export function sendCodexText(sessionName: string, text: string): void {
+  tmuxSend(sessionName, ["-l", text]);
+  tmuxSend(sessionName, ["C-m"]);
+}
+
 /** Send a named key sequence (Tab, Enter, C-c, C-d, Up, Down, Left, Right). */
 export function sendKey(sessionName: string, key: string): void {
   tmuxSend(sessionName, [key]);

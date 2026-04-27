@@ -32,6 +32,7 @@ import {
   stopStreamer,
   stopAllStreamers,
   resumePersistedStreamers,
+  sendCodexText,
   sendKey,
   sendText,
   scroll,
@@ -453,7 +454,11 @@ async function handleText(ctx: Context) {
       lastPromptAtMs: promptSentAtMs,
     });
   }
-  sendText(binding.sessionName, text, true);
+  if (binding.kind === "codex") {
+    sendCodexText(binding.sessionName, text);
+  } else {
+    sendText(binding.sessionName, text, true);
+  }
 
   if (binding.kind === "claude" && mode === "chat") {
     const chatId = ctxChatId();
