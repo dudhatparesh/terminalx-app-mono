@@ -656,13 +656,24 @@ export async function startTelegramBot(): Promise<Bot | null> {
   resumePersistedStreamers(bot);
   for (const t of listTopics()) {
     if (t.kind !== "claude") continue;
-    const sinceMs = getSessionCreatedMs(t.sessionName) ?? 0;
-    startClaudeTranscript(bot, forumChatId, t.topicId, {
+    if (!t.jsonlPath && !(t.viewMode === "chat" && t.pendingPrompt && t.lastPromptAtMs)) {
+      continue;
+    }
+    const sinceMs = t.lastPromptAtMs ?? getSessionCreatedMs(t.sessionName) ?? 0;
+    const started = startClaudeTranscript(bot, forumChatId, t.topicId, {
       cwd: t.cwd,
       sinceMs,
+      promptText: t.pendingPrompt,
       persistedJsonl: t.jsonlPath,
       initialOffset: t.jsonlOffset,
     });
+    if (started) {
+      await patchTopic(t.topicId, {
+        jsonlPath: started.jsonl,
+        pendingPrompt: undefined,
+        lastPromptAtMs: undefined,
+      });
+    }
   }
   return bot;
 }
