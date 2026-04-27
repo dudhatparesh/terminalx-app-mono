@@ -1,6 +1,12 @@
 import { execFileSync } from "child_process";
 import type { Bot } from "grammy";
-import { hasSession, captureVisiblePane, isPaneTui, getSessionCreatedMs } from "@/lib/tmux";
+import {
+  hasSession,
+  captureVisiblePane,
+  isPaneTui,
+  paneForegroundCommand,
+  getSessionCreatedMs,
+} from "@/lib/tmux";
 import { renderScreen, stripAnsi } from "./render";
 import { attachedKeyboard } from "./keyboard";
 import {
@@ -31,6 +37,8 @@ interface RuntimeState {
   lastFlushAt: number;
   /** Have we already nudged the user that a TUI is running? */
   tuiHinted: boolean;
+  /** First time this topic's pane was observed running Claude manually. */
+  claudeDetectedAtMs?: number;
 }
 
 /** Default view mode for a freshly-attached topic. */
@@ -195,14 +203,22 @@ async function flushChat(
   // don't want the welcome banner of Claude Code dumped as raw chat text
   // during that window.
   const binding = getTopic(topicId);
-  const knownTui = binding?.kind === "claude" || binding?.kind === "codex";
+  const foreground = paneForegroundCommand(sessionName);
+  const isClaudeCli = binding?.kind === "claude" || foreground === "claude";
+  const knownTui = isClaudeCli || binding?.kind === "codex";
   if (knownTui || isPaneTui(sessionName)) {
-    // TUI active. Try to wire up the JSONL transcript watcher; if a
-    // recent claude session JSONL exists, the user will start seeing
-    // formatted assistant / tool / thinking messages instead of the
-    // raw screen redraws.
-    if (!isClaudeTranscriptRunning(topicId)) {
-      const sinceMs = getSessionCreatedMs(sessionName) ?? Date.now();
+    // Claude writes a per-session JSONL transcript that can be safely
+    // streamed to Telegram. Other TUIs, including Codex, do not use that
+    // source, so guessing here can route another topic's Claude replies
+    // into this topic.
+    if (isClaudeCli && !isClaudeTranscriptRunning(topicId)) {
+      if (foreground === "claude" && !rt.claudeDetectedAtMs) {
+        rt.claudeDetectedAtMs = Date.now() - FLUSH_INTERVAL_MS - 5000;
+      }
+      const sinceMs =
+        binding?.kind === "claude"
+          ? (getSessionCreatedMs(sessionName) ?? Date.now())
+          : (rt.claudeDetectedAtMs ?? Date.now());
       const started = startClaudeTranscript(bot, chatId, topicId, {
         cwd: binding?.cwd,
         sinceMs,
@@ -213,17 +229,17 @@ async function flushChat(
         await patchTopic(topicId, { jsonlPath: started.jsonl });
         return;
       }
-      if (!rt.tuiHinted) {
-        rt.tuiHinted = true;
-        try {
-          await bot.api.sendMessage(
-            chatId,
-            "(TUI app running. /view screen to see the live screen, or attach via web for full fidelity.)",
-            { message_thread_id: topicId }
-          );
-        } catch {
-          /* ignore */
-        }
+    }
+    if (!rt.tuiHinted) {
+      rt.tuiHinted = true;
+      try {
+        await bot.api.sendMessage(
+          chatId,
+          "(TUI app running. /view screen to see the live screen, or attach via web for full fidelity.)",
+          { message_thread_id: topicId }
+        );
+      } catch {
+        /* ignore */
       }
     }
     return;

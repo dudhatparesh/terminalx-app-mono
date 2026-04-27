@@ -8,7 +8,13 @@ import {
   isPaneTui,
 } from "@/lib/tmux";
 import { canAccessSession, scopedSessionName } from "@/lib/session-scope";
-import { commandForKind, saveMeta, isValidKind, type SessionKind } from "@/lib/ai-sessions";
+import {
+  commandForKind,
+  saveMeta,
+  getMeta,
+  isValidKind,
+  type SessionKind,
+} from "@/lib/ai-sessions";
 import { resolveTelegramIdentity, botIsConfigured, type BotIdentity } from "./auth";
 import { sessionsKeyboard, CB } from "./keyboard";
 import {
@@ -60,10 +66,40 @@ async function gate(ctx: Context): Promise<BotIdentity | null> {
 
 async function reply(ctx: Context, text: string, opts: Parameters<Context["reply"]>[1] = {}) {
   try {
-    await ctx.reply(text, { ...opts });
+    const topicId = topicIdFromContext(ctx);
+    await ctx.reply(text, {
+      ...(topicId ? { message_thread_id: topicId } : {}),
+      ...opts,
+    });
   } catch (err) {
     console.error("[telegram/bot] reply failed", err);
   }
+}
+
+function topicIdFromContext(ctx: Context): number | undefined {
+  return (ctx.msg as { message_thread_id?: number } | undefined)?.message_thread_id;
+}
+
+function sessionBindingDefaults(
+  sessionName: string,
+  fallback?: Pick<TopicBinding, "kind" | "cwd">
+): Pick<TopicBinding, "kind" | "cwd"> {
+  const meta = getMeta(sessionName);
+  const session = listSessions().find((s) => s.name === sessionName);
+  return {
+    kind: meta?.kind ?? fallback?.kind ?? "bash",
+    cwd:
+      session?.activePath ?? fallback?.cwd ?? process.env.TERMINUS_ROOT ?? process.env.HOME ?? "/",
+  };
+}
+
+async function reconcileTopicBinding(binding: TopicBinding): Promise<TopicBinding> {
+  const defaults = sessionBindingDefaults(binding.sessionName, binding);
+  if (defaults.kind !== binding.kind || defaults.cwd !== binding.cwd) {
+    await patchTopic(binding.topicId, defaults);
+    return { ...binding, ...defaults };
+  }
+  return binding;
 }
 
 async function attachToTopic(b: Bot, identity: BotIdentity, binding: TopicBinding): Promise<void> {
@@ -99,9 +135,9 @@ async function attachToTopic(b: Bot, identity: BotIdentity, binding: TopicBindin
 
   // For TUI sessions (claude, vim, …) the user starts in chat mode but
   // would otherwise see nothing until the next assistant entry. Surface
-  // the most recent assistant message from the latest JSONL so they
+  // the most recent assistant message from the topic's JSONL so they
   // immediately have context for what was happening.
-  if (mode === "chat" && isPaneTui(binding.sessionName)) {
+  if (mode === "chat" && isPaneTui(binding.sessionName) && resolvedJsonl) {
     const last = readLastAssistantText(resolvedJsonl);
     if (last) {
       try {
@@ -154,7 +190,7 @@ async function handleSessions(ctx: Context) {
     await reply(ctx, "no sessions. the box is lonely.");
     return;
   }
-  await ctx.reply(`${all.length} session${all.length === 1 ? "" : "s"}:`, {
+  await reply(ctx, `${all.length} session${all.length === 1 ? "" : "s"}:`, {
     reply_markup: sessionsKeyboard(all),
   });
 }
@@ -232,6 +268,7 @@ async function handleAttachByName(ctx: Context, name: string) {
   if (!chatId) return;
   const existing = getTopicByName(name);
   if (existing) {
+    await reconcileTopicBinding(existing);
     const url = topicLink(chatId, existing.topicId);
     await reply(ctx, `already attached → ${url}`, {
       link_preview_options: { is_disabled: true },
@@ -239,11 +276,11 @@ async function handleAttachByName(ctx: Context, name: string) {
     return;
   }
   const topic = await bot.api.createForumTopic(chatId, name);
+  const defaults = sessionBindingDefaults(name);
   await attachToTopic(bot, identity, {
     topicId: topic.message_thread_id,
     sessionName: name,
-    kind: "bash", // best-effort default; metadata could refine
-    cwd: process.env.TERMINUS_ROOT || process.env.HOME || "/",
+    ...defaults,
   });
 }
 
@@ -394,7 +431,7 @@ async function handleText(ctx: Context) {
   const mode = binding.viewMode ?? "screen";
   if (mode === "chat" && isPaneTui(binding.sessionName)) {
     try {
-      await ctx.reply("📩 received · processing…");
+      await reply(ctx, "📩 received · processing…");
     } catch {
       /* ignore */
     }
@@ -586,6 +623,9 @@ export async function startTelegramBot(): Promise<Bot | null> {
   }
 
   // resume any persisted topic streamers
+  for (const t of listTopics()) {
+    await reconcileTopicBinding(t);
+  }
   resumePersistedStreamers(bot);
   for (const t of listTopics()) {
     if (t.kind !== "claude") continue;

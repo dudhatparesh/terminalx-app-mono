@@ -128,10 +128,10 @@ function claimedJsonls(skipTopicId?: number): Set<string> {
  * the project directory derived from the session's cwd, exclude JSONLs
  * already claimed by other topics, and pick the one whose ctime is just
  * after `sinceMs` (claude writes the first line within milliseconds of
- * starting). Falls back to most-recent if nothing matches the timestamp
- * window — better than nothing for legacy / pre-existing topics.
+ * starting). If that match is ambiguous, do not guess: a missing Telegram
+ * transcript is safer than sending one session's answer into another topic.
  */
-function findJsonlForSession(opts: {
+export function findJsonlForSession(opts: {
   cwd: string;
   sinceMs: number;
   exclude: Set<string>;
@@ -140,39 +140,19 @@ function findJsonlForSession(opts: {
   const dir = projectDirForCwd(cwd);
   const candidates = listJsonlIn(dir).filter((c) => !exclude.has(c.path));
   if (candidates.length === 0) return null;
-  // Allow a few seconds of clock skew between tmux and the file system.
+  // Allow a few seconds of clock skew between tmux and the file system,
+  // but require the transcript to appear shortly after the session/CLI was
+  // observed. Long-lived topics in the same cwd may have many Claude JSONLs.
   const grace = 5000;
+  const maxStartLag = 60_000;
   const created = candidates
-    .filter((c) => c.ctimeMs + grace >= sinceMs)
-    .sort((a, b) => a.ctimeMs - b.ctimeMs);
+    .filter((c) => c.ctimeMs + grace >= sinceMs && c.ctimeMs <= sinceMs + maxStartLag)
+    .sort(
+      (a, b) =>
+        Math.abs(a.ctimeMs - sinceMs) - Math.abs(b.ctimeMs - sinceMs) || a.ctimeMs - b.ctimeMs
+    );
   if (created.length > 0) return created[0]!.path;
-  // Fallback: most recently modified — best guess for an older session
-  // we attached to without a tmux creation timestamp.
-  return candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)[0]!.path;
-}
-
-/**
- * Legacy fallback: pick the globally most-recently-modified JSONL across
- * every project directory. Only used by `readLastAssistantText()` when no
- * cwd is supplied — never as a routing decision (which would mix topics).
- */
-function findLatestJsonlGlobal(): string | null {
-  if (!fs.existsSync(PROJECTS_DIR)) return null;
-  let latest: JsonlCandidate | null = null;
-  for (const dir of fs.readdirSync(PROJECTS_DIR)) {
-    const full = path.join(PROJECTS_DIR, dir);
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(full);
-    } catch {
-      continue;
-    }
-    if (!stat.isDirectory()) continue;
-    for (const c of listJsonlIn(full)) {
-      if (!latest || c.mtimeMs > latest.mtimeMs) latest = c;
-    }
-  }
-  return latest?.path ?? null;
+  return candidates.length === 1 ? candidates[0]!.path : null;
 }
 
 function renderEntry(entry: TranscriptEntry): string | null {
@@ -223,7 +203,11 @@ export function startClaudeTranscript(
   if (watchers.has(topicId)) return null;
 
   let jsonl: string | null = null;
-  if (opts.persistedJsonl && fs.existsSync(opts.persistedJsonl)) {
+  if (
+    opts.persistedJsonl &&
+    fs.existsSync(opts.persistedJsonl) &&
+    !claimedJsonls(topicId).has(opts.persistedJsonl)
+  ) {
     jsonl = opts.persistedJsonl;
   } else if (opts.cwd && typeof opts.sinceMs === "number") {
     jsonl = findJsonlForSession({
@@ -309,16 +293,14 @@ export function stopAllClaudeTranscripts(): void {
 }
 
 /**
- * Read a JSONL transcript backwards and return the last assistant text
- * entry, MarkdownV2-escaped. When `jsonlPath` is supplied (the topic's
- * own transcript), reads that; otherwise falls back to the globally
- * most-recently-modified JSONL.
+ * Read a topic's own JSONL transcript backwards and return the last
+ * assistant text entry, MarkdownV2-escaped.
  *
  * Caps the scan at the last 256 KB so we don't read 100 MB to find a
  * quote.
  */
 export function readLastAssistantText(jsonlPath?: string): string | null {
-  const jsonl = jsonlPath && fs.existsSync(jsonlPath) ? jsonlPath : findLatestJsonlGlobal();
+  const jsonl = jsonlPath && fs.existsSync(jsonlPath) ? jsonlPath : null;
   if (!jsonl) return null;
   try {
     const stat = fs.statSync(jsonl);
