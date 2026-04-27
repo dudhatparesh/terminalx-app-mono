@@ -164,6 +164,11 @@ export function stopClaudeTranscript(topicId: number): void {
   watchers.delete(topicId);
 }
 
+/** Idempotent — start the watcher only if one isn't already running. */
+export function isClaudeTranscriptRunning(topicId: number): boolean {
+  return watchers.has(topicId);
+}
+
 export function stopAllClaudeTranscripts(): void {
   for (const w of watchers.values()) void w.watcher.close();
   watchers.clear();

@@ -52,6 +52,26 @@ export function captureVisiblePane(name: string): string {
 }
 
 /**
+ * True when the pane's foreground program is using the alternate screen
+ * buffer — i.e. a TUI like vim, htop, claude code, less. Used by the
+ * Telegram chat-mode flush to decide whether the screen diff is going to
+ * be too noisy to render line-by-line.
+ */
+export function isPaneAlternate(name: string): boolean {
+  const safeName = sanitizeSessionName(name);
+  try {
+    const out = execFileSync(
+      TMUX_BIN,
+      ["display-message", "-p", "-t", safeName, "#{alternate_on}"],
+      { encoding: "utf-8", timeout: 2000 }
+    );
+    return out.trim() === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Raise tmux's per-session scrollback limit for any session the server
  * creates from now on. Runs at server startup; also invoked defensively
  * from createSession. Failures are ignored (e.g. no tmux server running

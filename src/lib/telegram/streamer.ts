@@ -1,6 +1,6 @@
 import { execFileSync } from "child_process";
 import type { Bot } from "grammy";
-import { hasSession, captureVisiblePane } from "@/lib/tmux";
+import { hasSession, captureVisiblePane, isPaneAlternate } from "@/lib/tmux";
 import { renderScreen, stripAnsi } from "./render";
 import { attachedKeyboard } from "./keyboard";
 import {
@@ -11,6 +11,7 @@ import {
   getForumChatId,
   type ViewMode,
 } from "./state";
+import { startClaudeTranscript, isClaudeTranscriptRunning } from "./claude-transcript";
 
 const FLUSH_INTERVAL_MS = 5000;
 const TMUX = "tmux";
@@ -28,6 +29,8 @@ interface RuntimeState {
   /** Last plain-text screen we've already sent (chat mode), used for diffs. */
   lastSentText: string;
   lastFlushAt: number;
+  /** Have we already nudged the user that a TUI is running? */
+  tuiHinted: boolean;
 }
 
 /** Default view mode by session kind. */
@@ -171,15 +174,48 @@ async function flushScreen(
  * inline keyboard — meant to read like a normal Telegram conversation.
  * Use slash commands (/snap, /detach, /kill, /view, /ctrlc, etc.) for
  * control instead.
+ *
+ * If the pane is on the alt-screen buffer (a TUI is running), we don't
+ * try to diff the rendered screen at all — too noisy. Instead we lean
+ * on the Claude JSONL transcript stream when available; if no JSONL
+ * exists, we send a one-time hint and stay quiet.
  */
 async function flushChat(
   bot: Bot,
   chatId: number,
   topicId: number,
-  _sessionName: string,
+  sessionName: string,
   ansi: string,
   rt: RuntimeState
 ): Promise<void> {
+  if (isPaneAlternate(sessionName)) {
+    // TUI active. Try to wire up the JSONL transcript watcher; if a
+    // recent claude session JSONL exists, the user will start seeing
+    // formatted assistant / tool / thinking messages instead of the
+    // raw screen redraws.
+    if (!isClaudeTranscriptRunning(topicId)) {
+      const started = startClaudeTranscript(bot, chatId, topicId, 0);
+      if (started) {
+        await patchTopic(topicId, { jsonlPath: started.jsonl });
+        return;
+      }
+      if (!rt.tuiHinted) {
+        rt.tuiHinted = true;
+        try {
+          await bot.api.sendMessage(
+            chatId,
+            "(TUI app running. /view screen to see the live screen, or attach via web for full fidelity.)",
+            { message_thread_id: topicId }
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    return;
+  }
+
+  // TUI not active — diff the visible bash screen and emit new lines.
   const text = stripAnsi(ansi)
     .split("\n")
     .map((l) => l.replace(/\s+$/, ""))
@@ -233,6 +269,7 @@ export function startStreamer(bot: Bot, topicId: number): void {
     lastRendered: "",
     lastSentText: "",
     lastFlushAt: 0,
+    tuiHinted: false,
     flushTimer: setInterval(() => {
       void renderAndFlush(bot, topicId);
     }, FLUSH_INTERVAL_MS),
