@@ -455,7 +455,7 @@ async function handleText(ctx: Context) {
     });
   }
   if (binding.kind === "codex") {
-    sendCodexText(binding.sessionName, text);
+    await sendCodexText(binding.sessionName, text);
   } else {
     sendText(binding.sessionName, text, true);
   }

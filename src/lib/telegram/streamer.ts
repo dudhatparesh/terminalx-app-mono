@@ -22,6 +22,7 @@ import { startClaudeTranscript, isClaudeTranscriptRunning } from "./claude-trans
 import { startCodexTranscript, isCodexTranscriptRunning } from "./codex-transcript";
 
 const FLUSH_INTERVAL_MS = 5000;
+const CODEX_INPUT_SETTLE_MS = 200;
 const TMUX = "tmux";
 
 /**
@@ -61,16 +62,30 @@ function tmuxSend(sessionName: string, args: string[]): void {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isCodexTurnActive(sessionName: string): boolean {
+  const pane = stripAnsi(captureVisiblePane(sessionName));
+  return /\bWorking \(|esc to interrupt/.test(pane);
+}
+
 /** Send a literal string (handles all printable chars, no key parsing). */
 export function sendText(sessionName: string, text: string, withEnter = true): void {
   tmuxSend(sessionName, ["-l", text]);
   if (withEnter) tmuxSend(sessionName, ["Enter"]);
 }
 
-/** Codex uses Enter for composer newlines; Ctrl-M submits the prompt. */
-export function sendCodexText(sessionName: string, text: string): void {
+/**
+ * Codex's TUI distinguishes raw Ctrl-M from tmux's Enter key. It also needs a
+ * short beat after literal paste before the submit/queue key is sent.
+ */
+export async function sendCodexText(sessionName: string, text: string): Promise<void> {
+  const shouldQueue = isCodexTurnActive(sessionName);
   tmuxSend(sessionName, ["-l", text]);
-  tmuxSend(sessionName, ["C-m"]);
+  await sleep(CODEX_INPUT_SETTLE_MS);
+  tmuxSend(sessionName, [shouldQueue ? "Tab" : "C-m"]);
 }
 
 /** Send a named key sequence (Tab, Enter, C-c, C-d, Up, Down, Left, Right). */
