@@ -10,14 +10,7 @@ import {
 } from "@/lib/tmux";
 import { renderScreen, stripAnsi } from "./render";
 import { attachedKeyboard } from "./keyboard";
-import {
-  getTopic,
-  listTopics,
-  patchTopic,
-  deleteTopic,
-  getForumChatId,
-  type ViewMode,
-} from "./state";
+import { getTopic, listTopics, patchTopic, getForumChatId, type ViewMode } from "./state";
 import { startClaudeTranscript, isClaudeTranscriptRunning } from "./claude-transcript";
 import { startCodexTranscript, isCodexTranscriptRunning } from "./codex-transcript";
 
@@ -116,8 +109,9 @@ export function scroll(sessionName: string, action: "up" | "down" | "cancel"): v
 
 /**
  * Render the live screen for a topic in screen mode (pinned-message edit) or
- * chat mode (incremental new-line messages). Detaches the topic if the tmux
- * session has gone away.
+ * chat mode (incremental new-line messages). Stops streaming if the tmux
+ * session has gone away, while keeping the topic binding so /delete can remove
+ * the stale Telegram topic after an ownership check.
  */
 async function renderAndFlush(bot: Bot, topicId: number): Promise<void> {
   const rt = runtimes.get(topicId);
@@ -129,15 +123,14 @@ async function renderAndFlush(bot: Bot, topicId: number): Promise<void> {
   // Detach if the tmux session vanished (user typed `exit`, or it crashed).
   if (!hasSession(binding.sessionName)) {
     await stopStreamer(topicId);
+    await patchTopic(topicId, { endedAtMs: Date.now() });
     try {
-      await bot.api.sendMessage(chatId, "session ended.", {
+      await bot.api.sendMessage(chatId, "session ended. send /delete to remove this topic.", {
         message_thread_id: topicId,
       });
-      await bot.api.closeForumTopic(chatId, topicId);
     } catch {
-      // ignore — topic may already be closed
+      // ignore — topic may already be gone
     }
-    await deleteTopic(topicId);
     return;
   }
 
@@ -392,5 +385,7 @@ export function stopAllStreamers(): void {
 
 /** Restart streamers for every persisted topic — called on bot startup. */
 export function resumePersistedStreamers(bot: Bot): void {
-  for (const t of listTopics()) startStreamer(bot, t.topicId);
+  for (const t of listTopics()) {
+    if (!t.endedAtMs) startStreamer(bot, t.topicId);
+  }
 }

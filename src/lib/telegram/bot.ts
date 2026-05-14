@@ -112,7 +112,8 @@ async function topicBindingForMessage(
   ctx: Context,
   identity: BotIdentity,
   topicId: number | undefined,
-  missingReply?: string
+  missingReply?: string,
+  opts: { allowEnded?: boolean } = {}
 ): Promise<TopicBinding | null> {
   if (!topicId) return null;
   const binding = getTopic(topicId);
@@ -122,6 +123,11 @@ async function topicBindingForMessage(
   }
   if (!canUseTopic(identity, binding)) {
     await reply(ctx, "session not yours.");
+    return null;
+  }
+  if (!opts.allowEnded && (binding.endedAtMs || !hasSession(binding.sessionName))) {
+    if (!binding.endedAtMs) await patchTopic(topicId, { endedAtMs: Date.now() });
+    await reply(ctx, "session ended. send /delete to remove this topic.");
     return null;
   }
   return binding;
@@ -165,7 +171,7 @@ async function attachToTopic(b: Bot, identity: BotIdentity, binding: TopicBindin
   if (!chatId) return;
   if (!canUseTopic(identity, binding)) return;
   const mode = binding.viewMode ?? defaultViewMode(binding.kind);
-  await setTopic({ ...binding, viewMode: mode });
+  await setTopic({ ...binding, viewMode: mode, endedAtMs: undefined });
   startStreamer(b, binding.topicId);
   let resolvedJsonl: string | undefined;
   let resolvedTranscriptKind: "claude" | "codex" | undefined;
@@ -246,7 +252,7 @@ async function handleStart(ctx: Context) {
       "inside a session topic:",
       "  • text → stdin",
       "  • reply with a file → upload to session cwd",
-      "  • /snap, /detach, /kill, /get <relpath>",
+      "  • /snap, /detach, /kill, /delete, /get <relpath>",
       "  • /view [screen|chat] — toggle pinned-screen vs message-stream view",
       "  • inline keyboard: ^C ^D Tab ↵ arrows scroll snap view detach kill",
     ].join("\n")
@@ -427,6 +433,41 @@ async function handleKill(ctx: Context) {
     }
   }
   await reply(ctx, `killed ${target}.`);
+}
+
+async function handleDelete(ctx: Context) {
+  const identity = await gate(ctx);
+  if (!identity) return;
+  if (!bot) return;
+  const topicId = ctx.message?.message_thread_id;
+  if (!topicId) {
+    await reply(ctx, "run /delete inside a session topic after its session has ended.");
+    return;
+  }
+  const binding = await topicBindingForMessage(
+    ctx,
+    identity,
+    topicId,
+    "this topic isn't bound to a session anymore.",
+    { allowEnded: true }
+  );
+  if (!binding) return;
+  if (hasSession(binding.sessionName)) {
+    await reply(ctx, "session is still running. exit or /kill it before deleting the topic.");
+    return;
+  }
+  const chatId = ctxChatId();
+  if (!chatId) return;
+  try {
+    await bot.api.deleteForumTopic(chatId, topicId);
+  } catch (err) {
+    await reply(ctx, `failed to delete topic: ${(err as Error).message}`);
+    return;
+  }
+  await stopStreamer(topicId);
+  stopClaudeTranscript(topicId);
+  stopCodexTranscript(topicId);
+  await deleteTopic(topicId);
 }
 
 async function handleSnap(ctx: Context) {
@@ -766,6 +807,7 @@ export async function startTelegramBot(): Promise<Bot | null> {
   bot.command("new", handleNew);
   bot.command("detach", handleDetach);
   bot.command("kill", handleKill);
+  bot.command("delete", handleDelete);
   bot.command("snap", handleSnap);
   bot.command("view", handleView);
   bot.command("get", handleGet);
@@ -812,6 +854,7 @@ export async function startTelegramBot(): Promise<Bot | null> {
   }
   resumePersistedStreamers(bot);
   for (const t of listTopics()) {
+    if (t.endedAtMs) continue;
     if (t.kind !== "claude" && t.kind !== "codex") continue;
     const hasResumeSource =
       !!t.jsonlPath || (t.viewMode === "chat" && !!t.pendingPrompt && !!t.lastPromptAtMs);

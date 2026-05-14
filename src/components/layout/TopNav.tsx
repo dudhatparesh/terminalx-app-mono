@@ -2,71 +2,71 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Command, LogOut } from "lucide-react";
+import { ChevronRight, Command, LogOut, PanelRight, Terminal } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
 interface TopNavProps {
+  hostname: string;
+  activeSession: string | null;
   onOpenPalette?: () => void;
 }
-
-const tabs = [
-  { href: "/dashboard", label: "sessions", match: /^\/dashboard/ },
-  { href: "/workspace", label: "workspace", match: /^\/workspace/ },
-  { href: "/settings", label: "settings", match: /^\/settings/ },
-];
 
 function initials(name: string): string {
   return name.slice(0, 2).toLowerCase();
 }
 
-export function TopNav({ onOpenPalette }: TopNavProps) {
+function sectionForPath(path: string): string {
+  if (path.startsWith("/workspace")) return "workspace";
+  if (path.startsWith("/settings")) return "settings";
+  if (path.startsWith("/admin")) return "admin";
+  return "sessions";
+}
+
+export function TopNav({ hostname, activeSession, onOpenPalette }: TopNavProps) {
   const path = usePathname();
   const { user, logout } = useAuth();
+  const section = sectionForPath(path);
 
   return (
     <div
-      className="h-12 flex items-center gap-3 sm:gap-5 px-3 sm:px-4 border-b border-[#1a1d24] bg-[#0a0b10] shrink-0"
+      className="flex h-12 shrink-0 items-center gap-3 border-b border-[#1a1d24] bg-[#0f1117] px-3"
       style={{ position: "sticky", top: 0, zIndex: 50 }}
     >
       <Link
         href="/dashboard"
-        className="flex items-baseline gap-0 text-[15px] sm:text-[16px] font-bold tracking-tight text-[#e6f0e4] shrink-0"
+        className="hidden items-center gap-2 text-[13px] font-medium text-[#a8b3a6] transition-colors hover:text-[#e6f0e4] sm:flex"
       >
-        <span className="text-[#00ff88]" style={{ textShadow: "0 0 6px rgba(0, 255, 136, 0.35)" }}>
-          [
+        <span className="flex h-5 w-5 items-center justify-center rounded bg-[#002a17] text-[9px] text-[#00ff88]">
+          tx
         </span>
         <span>terminalx</span>
-        <span className="stx-cursor" style={{ height: "0.9em" }} />
       </Link>
 
-      <div className="flex h-12 min-w-0 overflow-x-auto no-scrollbar">
-        {tabs.map((t) => {
-          const active = t.match.test(path);
-          return (
-            <Link
-              key={t.href}
-              href={t.href}
-              className={`px-2.5 sm:px-3 flex items-center text-[11px] relative shrink-0 ${
-                active ? "text-[#e6f0e4]" : "text-[#6b7569] hover:text-[#e6f0e4]"
-              } transition-colors`}
-              style={{
-                borderBottom: active ? "2px solid #00ff88" : "2px solid transparent",
-                marginBottom: -1,
-                boxShadow: active ? "inset 0 -2px 0 0 rgba(0, 255, 136, 0.35)" : undefined,
-              }}
-            >
-              {t.label}
-            </Link>
-          );
-        })}
+      <ChevronRight size={13} className="hidden text-[#3f4742] sm:block" />
+
+      <div className="flex min-w-0 items-center gap-2 text-[13px]">
+        <span className="truncate text-[#e6f0e4]">{section}</span>
+        {activeSession && (
+          <>
+            <ChevronRight size={13} className="text-[#3f4742]" />
+            <span className="truncate text-[#a8b3a6]">{activeSession}</span>
+          </>
+        )}
       </div>
 
       <div className="flex-1" />
 
+      <span className="hidden text-[11px] text-[#6b7569] lg:inline">{hostname}</span>
+
+      <div className="hidden items-center gap-1 rounded border border-[#252933] bg-[#0a0b10] px-2 py-1 text-[11px] text-[#a8b3a6] md:flex">
+        <Terminal size={12} className="text-[#5ccfe6]" />
+        <span className="max-w-[150px] truncate">{activeSession ?? `/${section}`}</span>
+      </div>
+
       <button
         onClick={onOpenPalette}
-        className="flex items-center gap-2 bg-[#14161e] border border-[#252933] hover:border-[#363b47]
-          rounded px-2 sm:px-2.5 py-1.5 text-[10px] text-[#6b7569] transition-colors shrink-0"
+        className="flex shrink-0 items-center gap-2 rounded border border-[#252933] bg-[#14161e] px-2 py-1.5 text-[10px]
+          text-[#6b7569] transition-colors hover:border-[#363b47] hover:text-[#e6f0e4] sm:px-2.5"
         title="command palette (⌘K)"
         aria-label="command palette"
       >
@@ -83,10 +83,10 @@ export function TopNav({ onOpenPalette }: TopNavProps) {
       </button>
 
       {user && (
-        <div className="flex items-center gap-2 pl-3 border-l border-[#1a1d24] shrink-0">
+        <div className="flex shrink-0 items-center gap-2 border-l border-[#1a1d24] pl-3">
           <span
-            className="w-6 h-6 rounded-full bg-[#1f1328] border border-[#a76fd0]
-              text-[#d58fff] text-[10px] font-bold flex items-center justify-center"
+            className="flex h-6 w-6 items-center justify-center rounded-full border border-[#a76fd0] bg-[#1f1328]
+              text-[10px] font-bold text-[#d58fff]"
           >
             {initials(user.username)}
           </span>
@@ -105,6 +105,8 @@ export function TopNav({ onOpenPalette }: TopNavProps) {
           </button>
         </div>
       )}
+
+      <PanelRight size={14} className="hidden text-[#6b7569] xl:block" />
     </div>
   );
 }

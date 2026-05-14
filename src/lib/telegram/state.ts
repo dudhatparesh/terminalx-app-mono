@@ -24,6 +24,8 @@ export interface TopicBinding {
   pinnedMsgId?: number;
   /** screen = pinned code-block edits; chat = each new chunk as its own msg. */
   viewMode?: ViewMode;
+  /** Unix ms when the backing tmux session ended; topic is kept for cleanup. */
+  endedAtMs?: number;
 }
 
 interface StateFile {
