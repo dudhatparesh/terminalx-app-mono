@@ -71,14 +71,15 @@ export function sendText(sessionName: string, text: string, withEnter = true): v
 }
 
 /**
- * Codex's TUI distinguishes raw Ctrl-M from tmux's Enter key. It also needs a
- * short beat after literal paste before the submit/queue key is sent.
+ * Codex needs a short beat after literal paste before the submit/queue key is
+ * sent. Use tmux's Enter key for idle prompts; raw Ctrl-M can leave text staged
+ * in recent Codex TUI builds.
  */
 export async function sendCodexText(sessionName: string, text: string): Promise<void> {
   const shouldQueue = isCodexTurnActive(sessionName);
   tmuxSend(sessionName, ["-l", text]);
   await sleep(CODEX_INPUT_SETTLE_MS);
-  tmuxSend(sessionName, [shouldQueue ? "Tab" : "C-m"]);
+  tmuxSend(sessionName, [shouldQueue ? "Tab" : "Enter"]);
 }
 
 /** Send a named key sequence (Tab, Enter, C-c, C-d, Up, Down, Left, Right). */

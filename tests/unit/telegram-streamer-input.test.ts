@@ -30,7 +30,7 @@ describe("telegram streamer input", () => {
     );
   });
 
-  it("submits Codex Telegram text with Ctrl-M instead of Enter", async () => {
+  it("submits Codex Telegram text with Enter after paste", async () => {
     const { sendCodexText } = await import("@/lib/telegram/streamer");
     execFileSync.mockReturnValueOnce("idle prompt");
 
@@ -51,7 +51,7 @@ describe("telegram streamer input", () => {
     expect(execFileSync).toHaveBeenNthCalledWith(
       3,
       "tmux",
-      ["send-keys", "-t", "=codex-a:", "C-m"],
+      ["send-keys", "-t", "=codex-a:", "Enter"],
       { timeout: 2000 }
     );
   });
