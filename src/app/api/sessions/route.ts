@@ -14,6 +14,7 @@ import {
 import { listTopics } from "@/lib/telegram/state";
 import { botIsConfigured, type BotIdentity } from "@/lib/telegram/auth";
 import { ensureTopicForSession } from "@/lib/telegram/bot";
+import { getEnsureTopic } from "@/lib/telegram/bot-bridge";
 import { getConfiguredMaxSessions } from "@/lib/security-config";
 import { assertNotSensitivePath, resolveSafePath } from "@/lib/file-service";
 import { createGitWorktreeForSession, removeGitWorktree } from "@/lib/git-worktree";
@@ -190,7 +191,9 @@ export async function POST(req: NextRequest) {
         role: role === "user" ? "user" : "admin",
       };
       try {
-        const result = await ensureTopicForSession(identity, finalName, "off");
+        // Attach in the bot-owning graph so its streamer has a single owner.
+        const ensure = getEnsureTopic() ?? ensureTopicForSession;
+        const result = await ensure(identity, finalName, "off");
         telegramTopic = result.topic;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

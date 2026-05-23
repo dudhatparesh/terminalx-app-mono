@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { audit } from "@/lib/audit-log";
 import { canAccessSession, getUserScoping } from "@/lib/session-scope";
 import { ensureTopicForSession } from "@/lib/telegram/bot";
+import { getEnsureTopic } from "@/lib/telegram/bot-bridge";
 import type { BotIdentity } from "@/lib/telegram/auth";
 import type { ViewMode } from "@/lib/telegram/state";
 
@@ -37,7 +38,11 @@ export async function POST(req: NextRequest) {
   };
 
   try {
-    const result = await ensureTopicForSession(identity, sessionName, viewMode);
+    // Prefer the bot instance's implementation so the streamer it spawns is
+    // owned by the graph that handles Telegram commands; fall back to the local
+    // copy when running without the custom server (e.g. `next dev`).
+    const ensure = getEnsureTopic() ?? ensureTopicForSession;
+    const result = await ensure(identity, sessionName, viewMode);
     audit("telegram_topic_view_updated", {
       username: username ?? undefined,
       detail: `${sessionName}:${result.topic.viewMode}`,

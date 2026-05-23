@@ -29,7 +29,13 @@ import { startRecorder, sweepExpiredRecordings } from "../src/lib/session-record
 import { verifyJwt, parseCookies } from "../src/lib/auth";
 import { getAuthMode } from "../src/lib/auth-config";
 import { ensureDefaultAdmin } from "../src/lib/users";
-import { startTelegramBot, stopTelegramBot, handleTelegramUpdate } from "../src/lib/telegram/bot";
+import {
+  startTelegramBot,
+  stopTelegramBot,
+  handleTelegramUpdate,
+  ensureTopicForSession,
+} from "../src/lib/telegram/bot";
+import { registerEnsureTopic } from "../src/lib/telegram/bot-bridge";
 import { getTelegramConfig, telegramConfigFingerprint } from "../src/lib/telegram/config";
 import { getConfiguredMaxSessions } from "../src/lib/security-config";
 import { assertValidStartupConfiguration } from "../src/lib/startup-validation";
@@ -574,6 +580,11 @@ app.prepare().then(() => {
   startTelegramBot().catch((err) => {
     console.error("[telegram] startTelegramBot failed", err);
   });
+  // Let the Next.js API routes attach sessions through this (bot-owning) graph,
+  // so web-initiated attaches share one streamer owner with Telegram commands.
+  // ensureTopicForSession reads the live `bot` at call time, so registering the
+  // reference now (before startTelegramBot resolves) is fine.
+  registerEnsureTopic(ensureTopicForSession);
   let telegramConfigState = telegramConfigFingerprint();
   const telegramConfigPoll = setInterval(() => {
     const next = telegramConfigFingerprint();
