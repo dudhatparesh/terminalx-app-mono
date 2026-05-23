@@ -35,7 +35,9 @@ interface StateFile {
   topics: Record<string, TopicBinding>;
 }
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR = process.env.TERMINALX_DATA_DIR
+  ? path.resolve(process.env.TERMINALX_DATA_DIR)
+  : path.join(process.cwd(), "data");
 const STATE_FILE = path.join(DATA_DIR, "telegram-state.json");
 
 let writeLock: Promise<void> = Promise.resolve();
@@ -49,6 +51,7 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 let cache: StateFile | null = null;
+let cacheMtimeMs = 0;
 
 function emptyState(): StateFile {
   return { topics: {} };
@@ -65,8 +68,28 @@ function readFromDisk(): StateFile {
   }
 }
 
+function currentMtimeMs(): number {
+  try {
+    return fs.statSync(STATE_FILE).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The Telegram bot (custom `tsx server`) and the Next.js API routes run as
+ * separate module instances, each with its own `cache`, but they share
+ * STATE_FILE on disk. A binding written by one instance must become visible to
+ * the other without a restart, so we reload whenever the file's mtime no longer
+ * matches what we last read. Writes reload first (inside withLock) so they merge
+ * the other instance's changes rather than clobbering them.
+ */
 function getState(): StateFile {
-  if (!cache) cache = readFromDisk();
+  const mtime = currentMtimeMs();
+  if (!cache || mtime !== cacheMtimeMs) {
+    cache = readFromDisk();
+    cacheMtimeMs = mtime;
+  }
   return cache;
 }
 
@@ -76,6 +99,7 @@ function atomicWrite(state: StateFile): void {
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { encoding: "utf-8", mode: 0o600 });
   fs.renameSync(tmp, STATE_FILE);
   cache = state;
+  cacheMtimeMs = currentMtimeMs();
 }
 
 export function listTopics(): TopicBinding[] {
