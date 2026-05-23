@@ -11,6 +11,7 @@ export interface SessionMeta {
   createdAt: string;
   createdBy?: string;
   managed?: boolean;
+  cwd?: string;
 }
 
 const DATA_DIR = path.join(process.cwd(), "data");

@@ -5,14 +5,16 @@ cd "$(dirname "$0")/.."
 
 USE_PM2=0
 ASSUME_YES=0
+WITH_WHISPER=0
 
 for arg in "$@"; do
   case "$arg" in
     --pm2) USE_PM2=1 ;;
+    --with-whisper) WITH_WHISPER=1 ;;
     -y|--yes) ASSUME_YES=1 ;;
     *)
       echo "Unknown option: $arg" >&2
-      echo "Usage: scripts/setup.sh [--pm2] [--yes]" >&2
+      echo "Usage: scripts/setup.sh [--pm2] [--with-whisper] [--yes]" >&2
       exit 2
       ;;
   esac
@@ -100,6 +102,10 @@ TERMINALX_JWT_SECRET="$JWT_SECRET"
 # TERMINALX_TELEGRAM_ALLOWED_USERS=123456789:$ADMIN_USERNAME
 # TERMINALX_TELEGRAM_FORUM_CHAT_ID=-1001234567890
 TERMINALX_TELEGRAM_MAX_TOPICS=10
+# Voice-note transcription uses local whisper.cpp. Run:
+#   npm run setup:whisper -- tiny.en
+TERMINALX_TELEGRAM_TRANSCRIBE_MODEL=tiny.en
+TERMINALX_TELEGRAM_TRANSCRIBE_LANGUAGE=auto
 EOF
   chmod 600 .env
   echo "Created .env with mode 0600."
@@ -108,6 +114,9 @@ EOF
 fi
 
 npm ci
+if [ "$WITH_WHISPER" -eq 1 ]; then
+  npm run setup:whisper -- tiny.en
+fi
 npm run build
 
 if [ "$USE_PM2" -eq 1 ]; then

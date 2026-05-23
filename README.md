@@ -23,7 +23,7 @@ One URL replaces your daily SSH workflow.
 - **Google OAuth** — Sign in with a whitelisted Google account
 - **Tailscale Ready** — Zero-config auth when used behind Tailscale
 - **Drag & Drop Upload** — Upload files directly to your server
-- **Telegram Bot** — Attach to your sessions from Telegram (one forum topic per session, inline keyboard, file transfer, Claude transcript streaming). See `.env.example` for setup.
+- **Telegram Bot** — Attach to your sessions from Telegram (one forum topic per session, inline keyboard, file transfer, chat/screen response modes, and local voice-note transcription). See `.env.example` for setup.
 
 ## Quick Start
 
@@ -41,6 +41,12 @@ To run under PM2:
 
 ```bash
 npm run setup -- --pm2
+```
+
+To also install the local whisper.cpp binary and the small `tiny.en` model for Telegram voice notes:
+
+```bash
+npm run setup -- --with-whisper
 ```
 
 ### Docker
@@ -150,6 +156,12 @@ Telegram can be configured either with environment variables or from the Setting
 ```
 
 The same response mode is available from the dashboard and Settings UI for sessions that already have a Telegram topic.
+
+Voice notes sent inside a session topic are downloaded by the bot, converted with the bundled ffmpeg binary, transcribed locally with whisper.cpp, and sent to the bound tmux session as normal text input. Install the default small native model with:
+
+```bash
+npm run setup:whisper -- tiny.en
+```
 
 ## How It Compares
 

@@ -40,6 +40,10 @@ async function loadFilesRoute() {
   return await import("@/app/api/files/route");
 }
 
+async function loadDirectoriesRoute() {
+  return await import("@/app/api/directories/route");
+}
+
 describe("snippets GET scoping", () => {
   let tmpDir: string;
   let originalCwd: string;
@@ -146,5 +150,38 @@ describe("files GET admin gate", () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.content).toBe("ok");
+  });
+});
+
+describe("directories GET auth gate", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tx-dirs-gate-"));
+    process.env.TERMINUS_ROOT = tmpDir;
+    process.env.TERMINALX_AUTH_MODE = "local";
+    fs.mkdirSync(path.join(tmpDir, "project"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "note.txt"), "ok");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.TERMINUS_ROOT;
+    delete process.env.TERMINALX_AUTH_MODE;
+  });
+
+  it("allows authenticated non-admin users to list directories only", async () => {
+    const { GET } = await loadDirectoriesRoute();
+    const res = await GET(mockRequest({ "x-username": "alice", "x-user-role": "user" }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.path).toBe(tmpDir);
+    expect(body.entries.map((entry: { name: string }) => entry.name)).toEqual(["project"]);
+  });
+
+  it("denies unauthenticated local requests", async () => {
+    const { GET } = await loadDirectoriesRoute();
+    const res = await GET(mockRequest());
+    expect(res.status).toBe(403);
   });
 });

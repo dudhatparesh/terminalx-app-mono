@@ -28,7 +28,7 @@ export interface FileInfo {
   permissions: string;
 }
 
-function getTerminusRoot(): string {
+export function getTerminusRoot(): string {
   return path.resolve(process.env.TERMINUS_ROOT || process.env.HOME || "/");
 }
 

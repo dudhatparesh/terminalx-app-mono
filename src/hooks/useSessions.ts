@@ -12,6 +12,7 @@ export interface TmuxSession {
   created: string;
   lastActivity?: string;
   activePath?: string;
+  cwd?: string;
   kind?: SessionKind;
   managed?: boolean;
   telegram?: {
@@ -23,6 +24,7 @@ export interface TmuxSession {
 
 export interface CreateSessionOptions {
   dangerouslySkipPermissions?: boolean;
+  cwd?: string;
 }
 
 interface UseSessionsReturn {
@@ -73,6 +75,7 @@ export function useSessions(): UseSessionsReturn {
             name,
             kind,
             dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+            cwd: options.cwd,
           }),
         });
         if (!res.ok) {

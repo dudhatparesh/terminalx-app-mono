@@ -1,8 +1,20 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Bot, Copy, Plus, RefreshCw, Sparkles, Terminal, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Bot,
+  ChevronUp,
+  Copy,
+  Folder,
+  FolderOpen,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  Terminal,
+  X,
+} from "lucide-react";
 import {
   useSessions,
   type SessionKind,
@@ -24,6 +36,21 @@ function KindIcon({ kind }: { kind?: SessionKind }) {
   if (kind === "claude") return <Sparkles size={14} className="text-[#d58fff] shrink-0" />;
   if (kind === "codex") return <Bot size={14} className="text-[#5ccfe6] shrink-0" />;
   return <Terminal size={14} className="text-[#6b7569] shrink-0" />;
+}
+
+interface DirectoryEntry {
+  name: string;
+  path: string;
+}
+
+function parentDirectory(path: string, root: string): string {
+  if (!path || path === root) return root || ".";
+  const trimmed = path.replace(/\/+$/, "");
+  const idx = trimmed.lastIndexOf("/");
+  if (idx <= 0) return root || ".";
+  const parent = trimmed.slice(0, idx);
+  if (root && parent !== root && !parent.startsWith(`${root}/`)) return root;
+  return parent || root || ".";
 }
 
 function SessionRow({
@@ -134,6 +161,12 @@ export function DashboardView() {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<SessionKind>("bash");
   const [skipPermissions, setSkipPermissions] = useState(false);
+  const [directoryPath, setDirectoryPath] = useState(".");
+  const [directoryRoot, setDirectoryRoot] = useState("");
+  const [directoryInput, setDirectoryInput] = useState(".");
+  const [directoryEntries, setDirectoryEntries] = useState<DirectoryEntry[]>([]);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directoryError, setDirectoryError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -142,14 +175,46 @@ export function DashboardView() {
   const idle = sessions.length - live;
   const preview = slugify(name);
 
+  const loadDirectories = useCallback(async (path: string) => {
+    try {
+      setDirectoryLoading(true);
+      setDirectoryError(null);
+      const res = await fetch(`/api/directories?path=${encodeURIComponent(path || ".")}`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error ?? `Failed to list directories: ${res.status}`);
+      }
+      setDirectoryPath(data.path ?? ".");
+      setDirectoryRoot(data.root ?? "");
+      setDirectoryInput(data.path ?? ".");
+      setDirectoryEntries((data.entries ?? []) as DirectoryEntry[]);
+    } catch (err) {
+      setDirectoryError(err instanceof Error ? err.message : "Failed to list directories");
+    } finally {
+      setDirectoryLoading(false);
+    }
+  }, []);
+
   const openDialog = useCallback(() => {
     setName("");
     setKind("bash");
     setSkipPermissions(false);
+    setDirectoryPath(".");
+    setDirectoryRoot("");
+    setDirectoryInput(".");
+    setDirectoryEntries([]);
+    setDirectoryError(null);
     setCreateError(null);
     setShowDialog(true);
+    void loadDirectories(".");
     setTimeout(() => inputRef.current?.focus(), 50);
-  }, []);
+  }, [loadDirectories]);
+
+  useEffect(() => {
+    if (showDialog && directoryPath === "." && directoryEntries.length === 0 && !directoryLoading) {
+      void loadDirectories(".");
+    }
+  }, [directoryEntries.length, directoryLoading, directoryPath, loadDirectories, showDialog]);
 
   const attach = useCallback(
     (s: TmuxSession) => {
@@ -163,15 +228,26 @@ export function DashboardView() {
     if (!n) return setCreateError("name required");
     if (!/^[a-zA-Z0-9_.\-]+$/.test(n)) return setCreateError("only letters, numbers, _ - .");
     if (sessions.some((s) => s.name === n)) return setCreateError("name already exists");
+    if (!directoryPath || directoryError) return setCreateError("select a valid directory");
     setCreateError(null);
     const session = await createSession(n, kind, {
       dangerouslySkipPermissions: kind === "claude" ? skipPermissions : undefined,
+      cwd: directoryPath,
     });
     if (session) {
       setShowDialog(false);
       router.push(`/workspace/${encodeURIComponent(session.name)}`);
     }
-  }, [preview, kind, skipPermissions, sessions, createSession, router]);
+  }, [
+    preview,
+    kind,
+    skipPermissions,
+    directoryPath,
+    directoryError,
+    sessions,
+    createSession,
+    router,
+  ]);
 
   const copyAttachUrl = useCallback(() => {
     const url = `${window.location.host} · /workspace/<session>`;
@@ -278,7 +354,7 @@ export function DashboardView() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-[440px] max-w-[90vw] rounded bg-[#14161e] border border-[#363b47] p-4"
+            className="w-[560px] max-w-[92vw] rounded bg-[#14161e] border border-[#363b47] p-4"
             style={{ boxShadow: "0 8px 24px rgba(0, 0, 0, 0.6)" }}
           >
             <div className="flex items-center justify-between mb-3">
@@ -347,6 +423,86 @@ export function DashboardView() {
               </div>
             </div>
 
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="block text-[10px] uppercase tracking-wider text-[#6b7569]">
+                  start directory
+                </span>
+                <button
+                  type="button"
+                  onClick={() => loadDirectories(".")}
+                  className="text-[10px] text-[#6b7569] hover:text-[#00ff88] transition-colors"
+                >
+                  root
+                </button>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => loadDirectories(parentDirectory(directoryPath, directoryRoot))}
+                  disabled={
+                    directoryLoading || Boolean(directoryRoot && directoryPath === directoryRoot)
+                  }
+                  className="shrink-0 h-[30px] w-[30px] grid place-items-center rounded bg-[#07080c] border border-[#252933]
+                    text-[#6b7569] hover:text-[#00ff88] hover:border-[#00cc6e] disabled:opacity-40 disabled:hover:text-[#6b7569]
+                    disabled:hover:border-[#252933] transition-colors"
+                  title="parent directory"
+                  aria-label="parent directory"
+                >
+                  <ChevronUp size={14} />
+                </button>
+                <input
+                  value={directoryInput}
+                  onChange={(e) => setDirectoryInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void loadDirectories(directoryInput);
+                    if (e.key === "Escape") setShowDialog(false);
+                  }}
+                  className="flex-1 min-w-0 px-2 py-1.5 rounded bg-[#07080c] border border-[#252933]
+                    text-[#e6f0e4] text-[12px] placeholder:text-[#6b7569]/50 font-mono
+                    focus:outline-none focus:border-[#00ff88] transition-colors"
+                  placeholder="select a directory"
+                />
+                <button
+                  type="button"
+                  onClick={() => loadDirectories(directoryInput)}
+                  disabled={directoryLoading}
+                  className="shrink-0 px-2.5 py-1.5 rounded bg-[#14161e] border border-[#252933]
+                    text-[#e6f0e4] text-[11px] hover:border-[#363b47] disabled:opacity-50 transition-colors"
+                >
+                  open
+                </button>
+              </div>
+              <div className="mt-2 max-h-[150px] overflow-y-auto rounded border border-[#1a1d24] bg-[#07080c]">
+                {directoryLoading ? (
+                  <div className="px-2 py-3 text-[11px] text-[#6b7569]">loading directories…</div>
+                ) : directoryError ? (
+                  <div className="px-2 py-3 text-[11px] text-[#ff5c5c]">{directoryError}</div>
+                ) : directoryEntries.length === 0 ? (
+                  <div className="px-2 py-3 text-[11px] text-[#6b7569]">no child directories</div>
+                ) : (
+                  directoryEntries.map((entry) => (
+                    <button
+                      key={entry.path}
+                      type="button"
+                      onClick={() => loadDirectories(entry.path)}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 text-left text-[12px] text-[#a8b3a6]
+                        hover:bg-[#10131a] hover:text-[#e6f0e4] transition-colors"
+                    >
+                      <Folder size={13} className="shrink-0 text-[#00cc6e]" />
+                      <span className="min-w-0 truncate">{entry.name}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+              <div className="mt-1 flex items-center gap-1.5 text-[10px] text-[#6b7569] min-w-0">
+                <FolderOpen size={11} className="shrink-0 text-[#00cc6e]" />
+                <code className="min-w-0 truncate bg-transparent border-0 px-0 text-[#00cc6e]">
+                  {directoryPath}
+                </code>
+              </div>
+            </div>
+
             {kind === "claude" && (
               <label
                 className={`mt-3 flex items-start gap-2 px-2 py-1.5 rounded border cursor-pointer transition-colors ${
@@ -380,8 +536,10 @@ export function DashboardView() {
 
             <button
               onClick={handleCreate}
+              disabled={directoryLoading || Boolean(directoryError)}
               className="w-full mt-3 px-3 py-1.5 rounded bg-[#002a17] border border-[#00cc6e]
-                text-[#00ff88] text-[13px] font-medium hover:bg-[#00ff88]/10 transition-colors"
+                text-[#00ff88] text-[13px] font-medium hover:bg-[#00ff88]/10 disabled:opacity-50
+                disabled:hover:bg-[#002a17] transition-colors"
               style={{ boxShadow: "0 0 6px rgba(0, 255, 136, 0.35)" }}
             >
               create →

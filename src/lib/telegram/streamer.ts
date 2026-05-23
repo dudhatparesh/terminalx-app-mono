@@ -16,6 +16,7 @@ import { startCodexTranscript, isCodexTranscriptRunning } from "./codex-transcri
 
 const FLUSH_INTERVAL_MS = 5000;
 const CODEX_INPUT_SETTLE_MS = 200;
+const TMUX_SEND_TIMEOUT_MS = 5000;
 const TMUX = "tmux";
 
 /**
@@ -47,11 +48,19 @@ export function defaultViewMode(_kind: string): ViewMode {
 
 const runtimes = new Map<number, RuntimeState>();
 
-function tmuxSend(sessionName: string, args: string[]): void {
+function tmuxSend(sessionName: string, args: string[]): boolean {
   try {
-    execFileSync(TMUX, ["send-keys", "-t", tmuxTarget(sessionName), ...args], { timeout: 2000 });
+    execFileSync(TMUX, ["send-keys", "-t", tmuxTarget(sessionName), ...args], {
+      timeout: TMUX_SEND_TIMEOUT_MS,
+    });
+    return true;
   } catch (err) {
-    console.error("[telegram/streamer] send-keys failed", err);
+    const action = args[0] === "-l" ? "literal input" : args.join(" ");
+    console.error(
+      `[telegram/streamer] send-keys failed session=${sessionName} action=${action}`,
+      err
+    );
+    return false;
   }
 }
 
@@ -59,26 +68,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isCodexTurnActive(sessionName: string): boolean {
-  const pane = stripAnsi(captureVisiblePane(sessionName));
-  return /\bWorking \(|esc to interrupt/.test(pane);
-}
-
 /** Send a literal string (handles all printable chars, no key parsing). */
-export function sendText(sessionName: string, text: string, withEnter = true): void {
-  tmuxSend(sessionName, ["-l", text]);
-  if (withEnter) tmuxSend(sessionName, ["Enter"]);
+export function sendText(sessionName: string, text: string, withEnter = true): boolean {
+  const wrote = tmuxSend(sessionName, ["-l", text]);
+  const submitted = withEnter ? tmuxSend(sessionName, ["Enter"]) : true;
+  return wrote && submitted;
 }
 
 /**
  * Codex's TUI distinguishes raw Ctrl-M from tmux's Enter key. It also needs a
- * short beat after literal paste before the submit/queue key is sent.
+ * short beat after literal paste before the submit key is sent.
  */
-export async function sendCodexText(sessionName: string, text: string): Promise<void> {
-  const shouldQueue = isCodexTurnActive(sessionName);
-  tmuxSend(sessionName, ["-l", text]);
+export async function sendCodexText(sessionName: string, text: string): Promise<boolean> {
+  const wrote = tmuxSend(sessionName, ["-l", text]);
   await sleep(CODEX_INPUT_SETTLE_MS);
-  tmuxSend(sessionName, [shouldQueue ? "Tab" : "C-m"]);
+  return wrote && tmuxSend(sessionName, ["C-m"]);
 }
 
 /** Send a named key sequence (Tab, Enter, C-c, C-d, Up, Down, Left, Right). */

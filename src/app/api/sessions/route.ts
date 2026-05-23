@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import * as fs from "fs";
 import { listSessions, createSession, killSession } from "@/lib/tmux";
 import { getUserScoping, canAccessSession, scopedSessionName } from "@/lib/session-scope";
 import { audit } from "@/lib/audit-log";
@@ -14,6 +15,32 @@ import { listTopics } from "@/lib/telegram/state";
 import { botIsConfigured, type BotIdentity } from "@/lib/telegram/auth";
 import { ensureTopicForSession } from "@/lib/telegram/bot";
 import { getConfiguredMaxSessions } from "@/lib/security-config";
+import { assertNotSensitivePath, resolveSafePath } from "@/lib/file-service";
+
+function resolveSessionStartDir(requestedCwd: unknown): string {
+  const requested =
+    typeof requestedCwd === "string" && requestedCwd.trim() ? requestedCwd.trim() : ".";
+  const startDir = resolveSafePath(requested);
+  assertNotSensitivePath(startDir);
+  const stats = fs.statSync(startDir);
+  if (!stats.isDirectory()) {
+    throw new Error("Path is not a directory");
+  }
+  return startDir;
+}
+
+function directoryErrorResponse(message: string): { error: string; status: number } {
+  if (message.includes("outside the allowed root") || message.includes("sensitive path")) {
+    return { error: "Access denied", status: 403 };
+  }
+  if (message.includes("ENOENT") || message.includes("no such file")) {
+    return { error: "Directory not found", status: 404 };
+  }
+  if (message.includes("not a directory")) {
+    return { error: "Path is not a directory", status: 400 };
+  }
+  return { error: "Invalid start directory", status: 400 };
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -31,10 +58,12 @@ export async function GET(req: NextRequest) {
     const byName = new Map(metadata.map((m) => [m.name, m]));
     const telegramByName = new Map(listTopics().map((t) => [t.sessionName, t]));
     const annotated = sessions.map((s) => {
+      const meta = byName.get(s.name);
       const telegram = telegramByName.get(s.name);
       return {
         ...s,
-        kind: byName.get(s.name)?.kind ?? "bash",
+        kind: meta?.kind ?? "bash",
+        cwd: meta?.cwd ?? s.activePath,
         managed: ensureManagedSession(s.name),
         telegram: telegram
           ? {
@@ -63,7 +92,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, kind, dangerouslySkipPermissions } = body;
+    const { name, kind, dangerouslySkipPermissions, cwd } = body;
 
     if (!name || typeof name !== "string") {
       return NextResponse.json({ error: "Missing or invalid session name" }, { status: 400 });
@@ -100,7 +129,16 @@ export async function POST(req: NextRequest) {
     const command = commandForKind(sessionKind, {
       dangerouslySkipPermissions: Boolean(dangerouslySkipPermissions),
     });
-    const startDir = process.env.TERMINUS_ROOT || process.env.HOME;
+
+    let startDir: string;
+    try {
+      startDir = resolveSessionStartDir(cwd);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const { error, status } = directoryErrorResponse(message);
+      return NextResponse.json({ error }, { status });
+    }
+
     createSession(finalName, command ?? undefined, startDir);
     await saveMeta({
       name: finalName,
@@ -108,6 +146,7 @@ export async function POST(req: NextRequest) {
       createdAt: new Date().toISOString(),
       createdBy: username || undefined,
       managed: true,
+      cwd: startDir,
     });
     let telegramTopic: {
       topicId: number;
@@ -134,7 +173,7 @@ export async function POST(req: NextRequest) {
       detail: `${finalName} (${sessionKind})`,
     });
     return NextResponse.json(
-      { success: true, name: finalName, kind: sessionKind, telegram: telegramTopic },
+      { success: true, name: finalName, kind: sessionKind, cwd: startDir, telegram: telegramTopic },
       { status: 201 }
     );
   } catch (err) {

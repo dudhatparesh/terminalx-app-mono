@@ -1,8 +1,10 @@
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import type { Bot } from "grammy";
 import { InputFile } from "grammy";
 import { assertNotSensitivePath, resolveSafePath } from "@/lib/file-service";
+import { getTelegramConfig } from "./config";
 
 const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MB — Telegram bot file limit
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
@@ -19,6 +21,30 @@ function safeFileName(name: string | undefined, fallback = "upload"): string {
 
 function isImage(filename: string): boolean {
   return IMAGE_EXTS.has(path.extname(filename).toLowerCase());
+}
+
+async function downloadTelegramFile(
+  bot: Bot,
+  fileId: string
+): Promise<{ buffer: Buffer; name: string }> {
+  const file = await bot.api.getFile(fileId);
+  if (file.file_size && file.file_size > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`file too large (${file.file_size} bytes, max ${MAX_DOWNLOAD_BYTES})`);
+  }
+  if (!file.file_path) {
+    throw new Error("telegram returned no file_path");
+  }
+
+  const token = getTelegramConfig().botToken;
+  if (!token) throw new Error("telegram bot token is not configured");
+  const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`download failed: ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (buffer.length > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`file too large after download`);
+  }
+  return { buffer, name: path.basename(file.file_path) };
 }
 
 /**
@@ -39,28 +65,26 @@ export async function downloadFromTelegram(
     throw new Error(`destination is not a directory: ${destDir}`);
   }
 
-  const file = await bot.api.getFile(fileId);
-  if (file.file_size && file.file_size > MAX_DOWNLOAD_BYTES) {
-    throw new Error(`file too large (${file.file_size} bytes, max ${MAX_DOWNLOAD_BYTES})`);
-  }
-  if (!file.file_path) {
-    throw new Error("telegram returned no file_path");
-  }
+  const { buffer: buf, name } = await downloadTelegramFile(bot, fileId);
 
-  const token = process.env.TERMINALX_TELEGRAM_BOT_TOKEN;
-  const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`download failed: ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > MAX_DOWNLOAD_BYTES) {
-    throw new Error(`file too large after download`);
-  }
-
-  const filename = safeFileName(preferredName ?? path.basename(file.file_path));
+  const filename = safeFileName(preferredName ?? name);
   const dest = path.join(safeDir, filename);
   fs.writeFileSync(dest, buf, { mode: 0o600 });
   const root = path.resolve(process.env.TERMINUS_ROOT || process.env.HOME || "/");
   return { savedTo: path.relative(root, dest) || filename, bytes: buf.length };
+}
+
+export async function downloadTelegramFileToTemp(
+  bot: Bot,
+  fileId: string,
+  preferredName?: string
+): Promise<{ filePath: string; tempDir: string; bytes: number }> {
+  const { buffer, name } = await downloadTelegramFile(bot, fileId);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "terminalx-tg-"));
+  const filename = safeFileName(preferredName ?? name, "voice-note");
+  const filePath = path.join(tempDir, filename);
+  fs.writeFileSync(filePath, buffer, { mode: 0o600 });
+  return { filePath, tempDir, bytes: buffer.length };
 }
 
 /**

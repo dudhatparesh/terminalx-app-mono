@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import { Bot, type Context } from "grammy";
 import {
   listSessions,
@@ -64,7 +65,8 @@ import {
   stopAllCodexTranscripts,
   readLastCodexAssistantText,
 } from "./codex-transcript";
-import { downloadFromTelegram, sendFromServer } from "./files";
+import { downloadFromTelegram, downloadTelegramFileToTemp, sendFromServer } from "./files";
+import { transcribeAudioFile } from "./transcription";
 
 let bot: Bot | null = null;
 
@@ -107,6 +109,10 @@ async function rejectReadOnly(ctx: Context): Promise<boolean> {
 
 function canUseTopic(identity: BotIdentity, binding: TopicBinding): boolean {
   return canAccessSession(identity.username, identity.role, binding.sessionName);
+}
+
+function clipTelegramText(text: string, maxLength = 900): string {
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
 async function topicBindingForMessage(
@@ -352,6 +358,7 @@ async function handleStart(ctx: Context) {
       "",
       "inside a session topic:",
       "  • text → stdin",
+      "  • voice note → local transcription → stdin",
       "  • reply with a file → upload to session cwd",
       "  • /snap, /detach, /kill, /delete, /get <relpath>",
       "  • /view [chat|screen|off] — control session responses in this topic",
@@ -658,39 +665,31 @@ async function handleSlashKey(ctx: Context, key: string) {
   setTimeout(() => snap(bot!, topicId), 250);
 }
 
-async function handleText(ctx: Context) {
-  if (!bot) return;
-  const identity = await gate(ctx);
-  if (!identity) return;
-  if (await rejectReadOnly(ctx)) return;
-  const text = ctx.message?.text;
-  if (!text || text.startsWith("/")) return; // commands handled by their own hooks
-  const topicId = ctx.message?.message_thread_id;
-  if (!topicId) {
-    // User typed in the General topic. The bot doesn't forward text from
-    // there — give a small hint so they know what to do.
-    await reply(ctx, "type inside a session topic to send to its terminal. /sessions to list.");
-    return;
-  }
-  const binding = await topicBindingForMessage(
-    ctx,
-    identity,
-    topicId,
-    "this topic isn't bound to a session anymore."
-  );
-  if (!binding) return;
+async function sendPromptToBinding(
+  ctx: Context,
+  binding: TopicBinding,
+  topicId: number,
+  text: string,
+  opts: { acknowledge?: boolean } = {}
+): Promise<boolean> {
+  if (!bot) return false;
   const mode = binding.viewMode ?? defaultViewMode(binding.kind);
   const promptSentAtMs = Date.now();
+
+  const sent =
+    binding.kind === "codex"
+      ? await sendCodexText(binding.sessionName, text)
+      : sendText(binding.sessionName, text, true);
+  if (!sent) {
+    await reply(ctx, "couldn't send input to tmux. please try again.");
+    return false;
+  }
+
   if (binding.kind === "claude" || binding.kind === "codex") {
     await patchTopic(topicId, {
       pendingPrompt: text,
       lastPromptAtMs: promptSentAtMs,
     });
-  }
-  if (binding.kind === "codex") {
-    await sendCodexText(binding.sessionName, text);
-  } else {
-    sendText(binding.sessionName, text, true);
   }
 
   if (binding.kind === "claude" && mode === "chat") {
@@ -736,13 +735,18 @@ async function handleText(ctx: Context) {
   // take many seconds to land via the JSONL transcript. Ack the input
   // right away so the user knows the bot received it instead of staring
   // at silence.
-  if (mode === "off") {
+  const shouldAcknowledge = opts.acknowledge ?? true;
+  if (shouldAcknowledge && mode === "off") {
     try {
       await reply(ctx, "input sent · responses off. /view chat or /view screen to resume.");
     } catch {
       /* ignore */
     }
-  } else if (mode === "chat" && (binding.kind !== "bash" || isPaneTui(binding.sessionName))) {
+  } else if (
+    shouldAcknowledge &&
+    mode === "chat" &&
+    (binding.kind !== "bash" || isPaneTui(binding.sessionName))
+  ) {
     try {
       await reply(ctx, "📩 received · processing…");
     } catch {
@@ -751,6 +755,82 @@ async function handleText(ctx: Context) {
   }
 
   setTimeout(() => snap(bot!, topicId), 250);
+  return true;
+}
+
+async function handleText(ctx: Context) {
+  if (!bot) return;
+  const identity = await gate(ctx);
+  if (!identity) return;
+  if (await rejectReadOnly(ctx)) return;
+  const text = ctx.message?.text;
+  if (!text || text.startsWith("/")) return; // commands handled by their own hooks
+  const topicId = ctx.message?.message_thread_id;
+  if (!topicId) {
+    // User typed in the General topic. The bot doesn't forward text from
+    // there — give a small hint so they know what to do.
+    await reply(ctx, "type inside a session topic to send to its terminal. /sessions to list.");
+    return;
+  }
+  const binding = await topicBindingForMessage(
+    ctx,
+    identity,
+    topicId,
+    "this topic isn't bound to a session anymore."
+  );
+  if (!binding) return;
+  await sendPromptToBinding(ctx, binding, topicId, text);
+}
+
+async function handleVoice(ctx: Context) {
+  if (!bot) return;
+  const identity = await gate(ctx);
+  if (!identity) return;
+  if (await rejectReadOnly(ctx)) return;
+  const topicId = ctx.message?.message_thread_id;
+  if (!topicId) {
+    await reply(ctx, "send voice notes inside a session topic.");
+    return;
+  }
+  const binding = await topicBindingForMessage(
+    ctx,
+    identity,
+    topicId,
+    "this topic isn't bound to a session anymore."
+  );
+  if (!binding) return;
+
+  const voice = ctx.message?.voice;
+  const audio = ctx.message?.audio;
+  const fileId = voice?.file_id ?? audio?.file_id;
+  if (!fileId) return;
+
+  let tempDir: string | undefined;
+  try {
+    await reply(ctx, "voice received · transcribing…");
+    const preferredName =
+      audio?.file_name ?? (voice ? `voice-${voice.file_unique_id}.ogg` : "voice-note.ogg");
+    const downloaded = await downloadTelegramFileToTemp(bot, fileId, preferredName);
+    tempDir = downloaded.tempDir;
+    const transcript = await transcribeAudioFile(downloaded.filePath);
+    const text = transcript.text.trim();
+    if (!text) {
+      await reply(ctx, "voice transcription produced no text.");
+      return;
+    }
+    await reply(ctx, `voice → ${clipTelegramText(text)}`);
+    await sendPromptToBinding(ctx, binding, topicId, text, { acknowledge: false });
+  } catch (err) {
+    await reply(ctx, `voice transcription failed: ${(err as Error).message}`);
+  } finally {
+    if (tempDir) {
+      try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 }
 
 async function handleFileUpload(ctx: Context) {
@@ -946,6 +1026,7 @@ export async function startTelegramBot(): Promise<Bot | null> {
 
   // text & file uploads inside topics
   bot.on("message:text", handleText);
+  bot.on(["message:voice", "message:audio"], handleVoice);
   bot.on(["message:photo", "message:document"], handleFileUpload);
 
   // inline keyboard
