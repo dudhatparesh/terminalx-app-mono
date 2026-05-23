@@ -67,6 +67,7 @@ import {
 } from "./codex-transcript";
 import { downloadFromTelegram, downloadTelegramFileToTemp, sendFromServer } from "./files";
 import { transcribeAudioFile } from "./transcription";
+import { forumTopicExists } from "./topic-health";
 
 let bot: Bot | null = null;
 
@@ -176,6 +177,18 @@ async function reconcileTopicBinding(binding: TopicBinding): Promise<TopicBindin
     return { ...binding, ...defaults };
   }
   return binding;
+}
+
+/**
+ * Tear down a binding whose Telegram topic no longer exists (deleted by a user
+ * in the forum). Stops its streamer/transcripts and removes the dead mapping so
+ * the caller can create a fresh topic and re-bind.
+ */
+async function dropStaleBinding(topicId: number): Promise<void> {
+  await stopStreamer(topicId);
+  stopClaudeTranscript(topicId);
+  stopCodexTranscript(topicId);
+  await deleteTopic(topicId);
 }
 
 async function attachToTopic(b: Bot, identity: BotIdentity, binding: TopicBinding): Promise<void> {
@@ -291,7 +304,7 @@ export async function ensureTopicForSession(
   }
 
   const existing = getTopicByName(sessionName);
-  if (existing) {
+  if (existing && (await forumTopicExists(b, chatId, existing.topicId))) {
     const reconciled = await reconcileTopicBinding(existing);
     const nextViewMode = viewMode ?? reconciled.viewMode ?? defaultViewMode(reconciled.kind);
     const binding = {
@@ -312,6 +325,10 @@ export async function ensureTopicForSession(
         created: false,
       },
     };
+  }
+  if (existing) {
+    // Bound topic was deleted in Telegram — drop the dead binding, then recreate below.
+    await dropStaleBinding(existing.topicId);
   }
 
   const maxTopics = topicQuotaReached();
@@ -471,12 +488,16 @@ async function handleAttachByName(ctx: Context, name: string) {
   if (!chatId) return;
   const existing = getTopicByName(name);
   if (existing) {
-    await reconcileTopicBinding(existing);
-    const url = topicLink(chatId, existing.topicId);
-    await reply(ctx, `already attached → ${url}`, {
-      link_preview_options: { is_disabled: true },
-    });
-    return;
+    if (await forumTopicExists(bot, chatId, existing.topicId)) {
+      await reconcileTopicBinding(existing);
+      const url = topicLink(chatId, existing.topicId);
+      await reply(ctx, `already attached → ${url}`, {
+        link_preview_options: { is_disabled: true },
+      });
+      return;
+    }
+    // Bound topic was deleted in Telegram — drop the dead binding and recreate below.
+    await dropStaleBinding(existing.topicId);
   }
   const maxTopics = topicQuotaReached();
   if (maxTopics !== null) {
