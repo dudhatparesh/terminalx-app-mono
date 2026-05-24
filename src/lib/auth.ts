@@ -120,6 +120,8 @@ export interface JwtPayload {
   userId: string;
   username: string;
   role: string;
+  /** Set on tokens issued via mobile pairing — used to revoke a single device. */
+  deviceId?: string;
 }
 
 export async function signJwt(payload: JwtPayload): Promise<string> {
@@ -143,7 +145,15 @@ export async function verifyJwt(token: string): Promise<JwtPayload | null> {
       userId: payload.userId as string,
       username: payload.username as string,
       role: payload.role as string,
+      deviceId: typeof payload.deviceId === "string" ? payload.deviceId : undefined,
     };
+
+    // Tokens issued via mobile pairing carry a deviceId — reject if the
+    // device has been revoked or deleted from the registry.
+    if (result.deviceId) {
+      const { isDeviceActive } = await import("./devices");
+      if (!isDeviceActive(result.deviceId)) return null;
+    }
 
     // Check that the user still exists (deleted users should not retain access)
     // Google OAuth users (userId starts with "google-") and single-user mode skip this check

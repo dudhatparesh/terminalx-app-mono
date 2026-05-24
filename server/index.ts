@@ -101,15 +101,36 @@ function warnIfReadableByGroupOrWorld(filePath: string): void {
 
 // ── WebSocket Auth Helper ──────────────────────────────────────────────────
 
+function extractWsToken(req: IncomingMessage): string | null {
+  // 1) Cookie (browser path)
+  const cookies = parseCookies(req.headers.cookie);
+  if (cookies["terminalx-session"]) return cookies["terminalx-session"];
+
+  // 2) ?token=... query param (mobile/native WebSocket path — RN's WebSocket
+  //    can't set custom headers, and the standard sec-websocket-protocol hack
+  //    requires the server to echo the protocol in the 101 response, which
+  //    we'd rather avoid coupling to the ws library's internals).
+  const url = parseUrl(req.url || "", true);
+  const queryToken = url.query.token;
+  if (typeof queryToken === "string" && queryToken) return queryToken;
+
+  // 3) Authorization: Bearer (non-browser HTTP clients that can set headers)
+  const auth = req.headers.authorization;
+  if (auth && auth.toLowerCase().startsWith("bearer ")) {
+    return auth.slice(7).trim();
+  }
+
+  return null;
+}
+
 async function authenticateWebSocket(req: IncomingMessage, socket: Socket): Promise<boolean> {
   // Only skip auth when explicitly in "none" mode
   if (AUTH_MODE === "none") return true;
 
-  const cookies = parseCookies(req.headers.cookie);
-  const token = cookies["terminalx-session"];
+  const token = extractWsToken(req);
 
   if (!token) {
-    audit("ws_auth_failed", { detail: "missing cookie" });
+    audit("ws_auth_failed", { detail: "missing token" });
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
     socket.destroy();
     return false;

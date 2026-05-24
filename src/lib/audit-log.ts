@@ -26,7 +26,11 @@ export type AuditEvent =
   | "log_access_denied"
   | "jwt_verify_failed"
   | "telegram_config_updated"
-  | "telegram_topic_view_updated";
+  | "telegram_topic_view_updated"
+  | "pairing_code_created"
+  | "pair_success"
+  | "pair_failed"
+  | "device_revoked";
 
 interface AuditEntry {
   timestamp: string;

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Bot, ExternalLink, Save, Shield } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { EngineToggle } from "@/components/terminal/EngineToggle";
+import { MobileSection } from "@/components/settings/MobileSection";
 import type { TelegramViewMode } from "@/hooks/useSessions";
 
 interface HealthInfo {
@@ -242,6 +243,10 @@ export function SettingsView() {
 
         <Section title="terminal engine" desc="reloads new tabs">
           <EngineToggle />
+        </Section>
+
+        <Section title="mobile" desc="pair the terminalx mobile app">
+          <MobileSection />
         </Section>
 
         <Section title="telegram" desc={telegram?.config.configured ? "configured" : "not ready"}>
