@@ -22,9 +22,14 @@ function getAuthModeEdge(): "none" | "password" | "local" | "google" {
 
 const PUBLIC_PATHS = [
   "/login",
-  "/api/auth/",
+  // List specific auth endpoints — anything else under /api/auth/ (e.g.
+  // /api/auth/pairing-codes for issuing mobile pair codes) requires auth.
+  "/api/auth/login",
+  "/api/auth/logout",
+  "/api/auth/me",
   "/api/auth/google",
   "/api/auth/google/callback",
+  "/api/auth/pair",
   "/api/health",
   // Telegram webhook is gated by its own secret-token header check inside
   // the route handler, so we let it through middleware.
@@ -66,16 +71,31 @@ export async function middleware(req: NextRequest) {
   }
 
   const base = externalBaseUrl(req);
+  const isApi = pathname.startsWith("/api/");
 
-  // Parse JWT from cookie
-  const token = req.cookies.get("terminalx-session")?.value;
-  if (!token) {
+  const unauthenticated = (): NextResponse => {
+    if (isApi) {
+      return NextResponse.json({ error: "Not authenticated", authMode }, { status: 401 });
+    }
     return NextResponse.redirect(new URL("/login", base));
+  };
+
+  // Parse JWT from cookie, falling back to Authorization: Bearer for API clients
+  // (mobile apps, scripts) that don't carry cookies.
+  let token = req.cookies.get("terminalx-session")?.value;
+  if (!token) {
+    const authHeader = req.headers.get("authorization") || "";
+    if (authHeader.toLowerCase().startsWith("bearer ")) {
+      token = authHeader.slice(7).trim();
+    }
+  }
+  if (!token) {
+    return unauthenticated();
   }
 
   const secret = getJwtSecretEdge();
   if (!secret) {
-    return NextResponse.redirect(new URL("/login", base));
+    return unauthenticated();
   }
 
   try {
@@ -83,10 +103,16 @@ export async function middleware(req: NextRequest) {
     requestHeaders.set("x-user-id", (payload.userId as string) || "");
     requestHeaders.set("x-user-role", (payload.role as string) || "");
     requestHeaders.set("x-username", (payload.username as string) || "");
+    if (typeof payload.deviceId === "string" && payload.deviceId) {
+      requestHeaders.set("x-device-id", payload.deviceId);
+    }
     return nextWithHeaders(requestHeaders);
   } catch (err) {
     const reason = err instanceof Error ? err.message : "unknown";
     audit("jwt_verify_failed", { detail: `${pathname} :: ${reason}` });
+    if (isApi) {
+      return NextResponse.json({ error: "Invalid session", authMode }, { status: 401 });
+    }
     const response = NextResponse.redirect(new URL("/login", base));
     response.cookies.delete("terminalx-session");
     return response;
