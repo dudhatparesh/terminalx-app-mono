@@ -145,6 +145,22 @@ function claimedJsonls(skipTopicId?: number): Set<string> {
   return set;
 }
 
+/**
+ * JSONLs this topic must never tail: ones with a running watcher owned by
+ * another topic AND ones merely *bound* on disk by another topic. At boot
+ * the watchers map fills in one topic at a time, so an in-memory check
+ * alone races with the resume loop — a topic resolving fresh could grab a
+ * sibling topic's file before its watcher has been registered.
+ */
+function excludedJsonls(skipTopicId?: number): Set<string> {
+  const set = claimedJsonls(skipTopicId);
+  for (const t of listTopics()) {
+    if (t.topicId === skipTopicId) continue;
+    if (t.jsonlPath) set.add(t.jsonlPath);
+  }
+  return set;
+}
+
 function normalizePrompt(text: string): string {
   return text.replace(/\r\n/g, "\n").trim();
 }
@@ -328,7 +344,7 @@ export function startClaudeTranscript(
     match = resolveJsonlForSession({
       cwd: opts.cwd,
       sinceMs: opts.sinceMs,
-      exclude: claimedJsonls(topicId),
+      exclude: excludedJsonls(topicId),
       promptText: opts.promptText,
     });
   }
@@ -336,14 +352,14 @@ export function startClaudeTranscript(
     if (
       opts.persistedJsonl &&
       fs.existsSync(opts.persistedJsonl) &&
-      !claimedJsonls(topicId).has(opts.persistedJsonl)
+      !excludedJsonls(topicId).has(opts.persistedJsonl)
     ) {
       match = { path: opts.persistedJsonl };
     } else if (opts.cwd && typeof opts.sinceMs === "number") {
       match = resolveJsonlForSession({
         cwd: opts.cwd,
         sinceMs: opts.sinceMs,
-        exclude: claimedJsonls(topicId),
+        exclude: excludedJsonls(topicId),
       });
     }
   }
@@ -417,48 +433,64 @@ export function startClaudeTranscript(
  * one is left frozen, and a watcher still tailing it silently black-holes
  * every later assistant message.
  *
- * Claude doesn't keep the JSONL open as a long-lived fd (open-append-close
- * per write), so `/proc/<pid>/fd` reveals nothing. The strongest signal we
- * have is mtime: if an unclaimed sibling in the same project dir was
- * written *to* meaningfully later than the bound one AND has been touched
- * in the recent past, it is the live file and the bound one is stale.
+ * The project dir is shared by EVERY claude session with the same cwd —
+ * including sessions that belong to other topics or to no topic at all —
+ * so "a newer, recently-active sibling exists" is NOT enough to rotate:
+ * that heuristic steals unrelated sessions' transcripts and cross-routes
+ * their replies into this topic. Rotation therefore requires hard restart
+ * evidence tied to this topic's own pane:
  *
- * Returns the replacement path, or null when the bound file still looks live.
- * Conservative on purpose — a false rotation is worse than a missed one.
+ *  1. a `claude` process is running on the pane's tty (claudeStartMs),
+ *  2. it started AFTER the bound file's last write — i.e. the bound file
+ *     cannot be the current process's transcript,
+ *  3. the candidate was created after that process started (with a small
+ *     clock-skew grace), so it is a file this process could have written,
+ *  4. the candidate is unambiguous — if several siblings qualify we refuse
+ *     to guess.
+ *
+ * Returns the replacement path, or null when the bound file still looks
+ * live or the evidence is ambiguous. Conservative on purpose — a false
+ * rotation is far worse than a missed one (the user can re-tap /sessions).
  */
-export function findLiveReplacementJsonl(topicId: number, currentJsonlPath: string): string | null {
+export function findLiveReplacementJsonl(
+  topicId: number,
+  currentJsonlPath: string,
+  claudeStartMs: number | null
+): string | null {
   const STALE_GAP_MS = 60_000;
   const RECENT_ACTIVITY_MS = 5 * 60 * 1000;
+  const CTIME_GRACE_MS = 5000;
+  // No claude process on this topic's pane → the bound file froze because
+  // the session ended, not because of a restart. Never rotate.
+  if (claudeStartMs === null) return null;
   let boundMtime: number;
   try {
     boundMtime = fs.statSync(currentJsonlPath).mtimeMs;
   } catch {
     return null;
   }
+  // The bound file was written after the current claude started → it is
+  // (or plausibly was) this very process's transcript. No restart happened;
+  // a newer sibling can only belong to someone else.
+  if (claudeStartMs <= boundMtime) return null;
   const now = Date.now();
   const dir = path.dirname(currentJsonlPath);
-  // Exclude JSONLs in use by ANOTHER topic — both ones with a running watcher
-  // and ones merely *bound* on disk. At boot the watchers map fills in one
-  // topic at a time, so an in-memory check alone races with the resume loop
-  // and can wrongly rotate into a sibling topic's file before its watcher has
-  // been registered.
-  const exclude = claimedJsonls(topicId);
-  for (const t of listTopics()) {
-    if (t.topicId === topicId) continue;
-    if (t.jsonlPath) exclude.add(t.jsonlPath);
-  }
-  let bestPath: string | null = null;
-  let bestMtime = -Infinity;
+  const exclude = excludedJsonls(topicId);
+  const candidates: string[] = [];
   try {
     for (const entry of fs.readdirSync(dir)) {
       if (!entry.endsWith(".jsonl")) continue;
       const p = path.join(dir, entry);
       if (p === currentJsonlPath || exclude.has(p)) continue;
       try {
-        const m = fs.statSync(p).mtimeMs;
-        if (m > boundMtime + STALE_GAP_MS && now - m < RECENT_ACTIVITY_MS && m > bestMtime) {
-          bestPath = p;
-          bestMtime = m;
+        const s = fs.statSync(p);
+        const ctime = s.birthtimeMs && s.birthtimeMs > 0 ? s.birthtimeMs : s.ctimeMs;
+        if (
+          ctime >= claudeStartMs - CTIME_GRACE_MS &&
+          s.mtimeMs > boundMtime + STALE_GAP_MS &&
+          now - s.mtimeMs < RECENT_ACTIVITY_MS
+        ) {
+          candidates.push(p);
         }
       } catch {
         /* skip unreadable */
@@ -467,7 +499,13 @@ export function findLiveReplacementJsonl(topicId: number, currentJsonlPath: stri
   } catch {
     /* skip unreadable dir */
   }
-  return bestPath;
+  if (candidates.length === 1) return candidates[0]!;
+  if (candidates.length > 1) {
+    console.error(
+      `[telegram/claude] topic ${topicId}: ${candidates.length} JSONLs created since claude restart — ambiguous, not rotating`
+    );
+  }
+  return null;
 }
 
 export function stopClaudeTranscript(topicId: number): void {

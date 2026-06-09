@@ -266,6 +266,40 @@ export function getSessionCreatedMs(name: string): number | null {
   }
 }
 
+/**
+ * Unix-epoch milliseconds at which the `claude` process attached to the
+ * session's pane tty started, or null when no claude process is running
+ * there. Claude restarts inside a pane are sequential (exit, then run
+ * again), so the process start time is hard evidence of *when* the current
+ * claude began — the Telegram JSONL router uses it to decide whether the
+ * bound transcript predates the current process (a restart happened) and
+ * which sibling JSONLs this process could plausibly have created.
+ */
+export function paneClaudeStartMs(name: string): number | null {
+  const target = tmuxTarget(name);
+  try {
+    const tty = execFileSync(TMUX_BIN, ["display-message", "-p", "-t", target, "#{pane_tty}"], {
+      encoding: "utf-8",
+      timeout: 2000,
+    }).trim();
+    if (!tty.startsWith("/dev/")) return null;
+    const out = execFileSync("ps", ["-t", tty.slice("/dev/".length), "-o", "etimes=,comm="], {
+      encoding: "utf-8",
+      timeout: 2000,
+    });
+    let best: number | null = null;
+    for (const line of out.split("\n")) {
+      const m = line.trim().match(/^(\d+)\s+(.*)$/);
+      if (!m || m[2]!.trim() !== "claude") continue;
+      const startMs = Date.now() - parseInt(m[1]!, 10) * 1000;
+      if (best === null || startMs > best) best = startMs;
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
 export function hasSession(name: string): boolean {
   const target = tmuxTarget(name);
   try {

@@ -3,6 +3,7 @@ import * as path from "path";
 import * as os from "os";
 import type { Bot } from "grammy";
 import { watch, FSWatcher } from "chokidar";
+import { listTopics } from "./state";
 
 interface SessionMetaEntry {
   timestamp?: string;
@@ -108,6 +109,21 @@ function claimedJsonls(skipTopicId?: number): Set<string> {
   for (const [tid, rec] of watchers.entries()) {
     if (tid === skipTopicId) continue;
     set.add(rec.jsonl);
+  }
+  return set;
+}
+
+/**
+ * JSONLs this topic must never tail: ones watched in-memory by another
+ * topic AND ones persisted as another topic's binding on disk. The
+ * in-memory set alone races with the boot resume loop — a topic resolving
+ * fresh could grab a sibling topic's file before its watcher registers.
+ */
+function excludedJsonls(skipTopicId?: number): Set<string> {
+  const set = claimedJsonls(skipTopicId);
+  for (const t of listTopics()) {
+    if (t.topicId === skipTopicId) continue;
+    if (t.jsonlPath) set.add(t.jsonlPath);
   }
   return set;
 }
@@ -351,11 +367,11 @@ export function startCodexTranscript(
       sinceMs: opts.sinceMs,
       promptText: opts.promptText,
       sessionStartedMs: opts.sessionStartedMs,
-      exclude: claimedJsonls(topicId),
+      exclude: excludedJsonls(topicId),
     });
   }
   if (!match && opts.persistedJsonl) {
-    if (fs.existsSync(opts.persistedJsonl) && !claimedJsonls(topicId).has(opts.persistedJsonl)) {
+    if (fs.existsSync(opts.persistedJsonl) && !excludedJsonls(topicId).has(opts.persistedJsonl)) {
       match = { path: opts.persistedJsonl };
     }
   }

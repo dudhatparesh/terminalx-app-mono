@@ -31,6 +31,10 @@ function newCase(): {
   const dir = fs.mkdtempSync(path.join(tmp, "case-"));
   return {
     dir,
+    // Note: utimes only sets mtime — the file's birthtime stays "now", i.e.
+    // every test file looks freshly created. Tests steer the ctime gate via
+    // claudeStartMs instead (past = candidate passes, future = candidate
+    // predates the restart and must be rejected).
     mk: (name, mtimeSec) => {
       const p = path.join(dir, name);
       fs.writeFileSync(p, "");
@@ -43,46 +47,78 @@ function newCase(): {
 describe("findLiveReplacementJsonl", () => {
   const nowSec = Math.floor(Date.now() / 1000);
   const TOPIC = 9999; // not registered with any watcher → claimedJsonls is empty
+  // A claude process that (re)started 5 minutes ago — after every "stale"
+  // bound file in these cases was last written.
+  const restartedMs = (nowSec - 300) * 1000;
 
-  it("returns the freshest sibling when the bound JSONL is stale and a live one exists", () => {
+  it("rotates to the lone live sibling when claude restarted after the bound JSONL froze", () => {
     const { mk } = newCase();
     const bound = mk("stale.jsonl", nowSec - 86400);
     const live = mk("live.jsonl", nowSec - 10);
-    expect(findLiveReplacementJsonl(TOPIC, bound)).toBe(live);
+    expect(findLiveReplacementJsonl(TOPIC, bound, restartedMs)).toBe(live);
   });
 
-  it("picks the freshest among multiple recent unclaimed siblings", () => {
+  it("never rotates without a claude process on the pane (claudeStartMs null)", () => {
     const { mk } = newCase();
     const bound = mk("stale.jsonl", nowSec - 86400);
-    mk("older.jsonl", nowSec - 240); // 4 min ago, still inside the 5-min window
-    const live = mk("newest.jsonl", nowSec - 5);
-    expect(findLiveReplacementJsonl(TOPIC, bound)).toBe(live);
+    mk("live.jsonl", nowSec - 10);
+    expect(findLiveReplacementJsonl(TOPIC, bound, null)).toBeNull();
+  });
+
+  it("never rotates when claude started before the bound JSONL's last write (no restart)", () => {
+    const { mk } = newCase();
+    // Long-running idle claude: process started a day ago, bound file last
+    // written an hour ago. A live unrelated sibling must NOT be stolen.
+    const bound = mk("own.jsonl", nowSec - 3600);
+    mk("someone-elses.jsonl", nowSec - 10);
+    const longRunningMs = (nowSec - 86400) * 1000;
+    expect(findLiveReplacementJsonl(TOPIC, bound, longRunningMs)).toBeNull();
+  });
+
+  it("rejects candidates created before the claude restart", () => {
+    const { mk } = newCase();
+    const bound = mk("stale.jsonl", nowSec - 86400);
+    mk("pre-existing-live.jsonl", nowSec - 10);
+    // claude "restarts" 60s in the future → every test file (birthtime ≈ now)
+    // predates it and must fail the ctime gate.
+    const futureStartMs = (nowSec + 60) * 1000;
+    expect(findLiveReplacementJsonl(TOPIC, bound, futureStartMs)).toBeNull();
+  });
+
+  it("refuses to guess when several siblings qualify (ambiguous)", () => {
+    const { mk } = newCase();
+    const bound = mk("stale.jsonl", nowSec - 86400);
+    mk("candidate-a.jsonl", nowSec - 240);
+    mk("candidate-b.jsonl", nowSec - 5);
+    expect(findLiveReplacementJsonl(TOPIC, bound, restartedMs)).toBeNull();
   });
 
   it("does not rotate when the bound JSONL is still being written to", () => {
     const { mk } = newCase();
     const bound = mk("live.jsonl", nowSec - 10);
     mk("older-sibling.jsonl", nowSec - 1000);
-    expect(findLiveReplacementJsonl(TOPIC, bound)).toBeNull();
+    expect(findLiveReplacementJsonl(TOPIC, bound, restartedMs)).toBeNull();
   });
 
   it("does not rotate when the sibling is only marginally newer (gap < 60 s)", () => {
     const { mk } = newCase();
     const bound = mk("current.jsonl", nowSec - 100);
     mk("barely-newer.jsonl", nowSec - 70);
-    expect(findLiveReplacementJsonl(TOPIC, bound)).toBeNull();
+    expect(findLiveReplacementJsonl(TOPIC, bound, (nowSec - 90) * 1000)).toBeNull();
   });
 
   it("does not rotate to a sibling that itself looks dormant (no activity in 5 min)", () => {
     const { mk } = newCase();
     const bound = mk("very-stale.jsonl", nowSec - 86400 * 3);
     mk("also-dormant.jsonl", nowSec - 86400);
-    expect(findLiveReplacementJsonl(TOPIC, bound)).toBeNull();
+    expect(findLiveReplacementJsonl(TOPIC, bound, restartedMs)).toBeNull();
   });
 
   it("returns null when the bound JSONL does not exist", () => {
     const { dir } = newCase();
-    expect(findLiveReplacementJsonl(TOPIC, path.join(dir, "missing.jsonl"))).toBeNull();
+    expect(
+      findLiveReplacementJsonl(TOPIC, path.join(dir, "missing.jsonl"), restartedMs)
+    ).toBeNull();
   });
 
   it("never rotates into a JSONL that another topic has bound on disk", async () => {
@@ -98,10 +134,10 @@ describe("findLiveReplacementJsonl", () => {
       cwd: "/x",
       jsonlPath: otherTopicJsonl,
     });
-    expect(findLiveReplacementJsonl(TOPIC, bound)).toBeNull();
+    expect(findLiveReplacementJsonl(TOPIC, bound, restartedMs)).toBeNull();
     // Now drop a different live sibling — that one IS fair game.
     const trulyFree = mk("free-live.jsonl", nowSec - 4);
-    expect(findLiveReplacementJsonl(TOPIC, bound)).toBe(trulyFree);
+    expect(findLiveReplacementJsonl(TOPIC, bound, restartedMs)).toBe(trulyFree);
   });
 
   it("ignores non-JSONL files in the project dir", () => {
@@ -110,6 +146,6 @@ describe("findLiveReplacementJsonl", () => {
     const distractor = path.join(dir, "scratch.txt");
     fs.writeFileSync(distractor, "");
     fs.utimesSync(distractor, nowSec - 10, nowSec - 10);
-    expect(findLiveReplacementJsonl(TOPIC, bound)).toBeNull();
+    expect(findLiveReplacementJsonl(TOPIC, bound, restartedMs)).toBeNull();
   });
 });

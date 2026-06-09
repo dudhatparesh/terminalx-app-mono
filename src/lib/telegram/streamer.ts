@@ -5,6 +5,7 @@ import {
   captureVisiblePane,
   isPaneTui,
   paneForegroundCommand,
+  paneClaudeStartMs,
   getSessionCreatedMs,
   tmuxTarget,
 } from "@/lib/tmux";
@@ -269,12 +270,18 @@ async function flushChat(
 
     // If Claude was restarted inside the same tmux session the bound JSONL is
     // now frozen and a fresh one is being written. Drop any watcher stuck on
-    // the dead file and seed the next start with the live replacement.
+    // the dead file and seed the next start with the live replacement. The
+    // pane's claude process start time is the restart evidence — without it
+    // (or when the bound file postdates it) no rotation happens, so we never
+    // steal another session's transcript from the shared project dir.
     const liveReplacement =
       isClaudeCli && binding?.jsonlPath
-        ? findLiveReplacementJsonl(topicId, binding.jsonlPath)
+        ? findLiveReplacementJsonl(topicId, binding.jsonlPath, paneClaudeStartMs(sessionName))
         : null;
     if (liveReplacement && isClaudeTranscriptRunning(topicId)) {
+      console.log(
+        `[telegram/claude] topic ${topicId}: rotating ${binding?.jsonlPath} -> ${liveReplacement}`
+      );
       stopClaudeTranscript(topicId);
     }
 
