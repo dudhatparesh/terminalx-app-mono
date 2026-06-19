@@ -79,6 +79,42 @@ describe("asCodeBlock", () => {
   });
 });
 
+describe("markdownToTelegramV2 — adversarial inputs (verified accepted by Telegram 2026-06-19)", () => {
+  // Each of these was POSTed to a live forum topic with parse_mode=MarkdownV2
+  // and accepted (ok=true). We can't re-check Telegram offline, but the
+  // invariant Telegram enforces — balanced code fences and no converter
+  // throw — is asserted here so a future regex change can't silently break
+  // these without tripping a test.
+  const inputs: Record<string, string> = {
+    "unbalanced asterisks": "a single * here and ** two there, no close",
+    "underscore-heavy code": "`a_b_c_d` and bare a_b_c_d outside",
+    "nested bold+italic+code": "**bold _ital `co_de` ital_ bold**",
+    "url with underscores": "see https://x.io/a_b_c?d=e_f for details",
+    "markdown table": "| col_a | col_b |\n|-------|-------|\n| 1 | 2 |",
+    "double backtick inline": "use ``arr[`x`]`` carefully",
+    "brackets and parens prose": "array[0] and func(x, y) and {a: 1}",
+    "fence no lang + inner backtick": "```\nprintf '`%s`\\n' hi\n```",
+    "hr + heading#noSpace": "---\n#nospace heading\ntext",
+    "emoji + escapes": "done ✅ 100% \\o/ <tag> & more!",
+  };
+
+  for (const [name, md] of Object.entries(inputs)) {
+    it(`converts without throwing and keeps fences balanced: ${name}`, () => {
+      let out = "";
+      expect(() => {
+        out = markdownToTelegramV2(md);
+      }).not.toThrow();
+      const fences = out.split("\n").filter((l) => l.trim().startsWith("```")).length;
+      expect(fences % 2).toBe(0);
+    });
+  }
+
+  it("renders a fenced code block's contents literally (no inner markdown/escape noise)", () => {
+    // Snake_case and asterisks inside a fence must survive untouched.
+    expect(markdownToTelegramV2("```\nrm *_tmp\n```")).toBe("```\nrm *_tmp\n```");
+  });
+});
+
 describe("splitForTelegram", () => {
   it("returns short messages untouched", () => {
     expect(splitForTelegram("hello")).toEqual(["hello"]);
