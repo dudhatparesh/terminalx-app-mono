@@ -18,6 +18,7 @@ import {
   isClaudeTranscriptRunning,
   stopClaudeTranscript,
   findLiveReplacementJsonl,
+  bindingIsForeignToPane,
 } from "./claude-transcript";
 import { startCodexTranscript, isCodexTranscriptRunning } from "./codex-transcript";
 
@@ -238,7 +239,7 @@ async function flushChat(
   // hasn't yet exec'd `claude`, and isPaneTui briefly returns false. We
   // don't want the welcome banner of Claude Code dumped as raw chat text
   // during that window.
-  const binding = getTopic(topicId);
+  let binding = getTopic(topicId);
   const foreground = paneForegroundCommand(sessionName);
   const isClaudeCli = binding?.kind === "claude" || foreground === "claude";
   const isCodexCli = binding?.kind === "codex" || foreground === "codex";
@@ -268,6 +269,26 @@ async function flushChat(
     // Claude and Codex each write per-session JSONL transcripts. Other TUIs
     // do not have a topic-safe source, so we stay quiet for those in chat mode.
 
+    const claudeStartMs = paneClaudeStartMs(sessionName);
+
+    // A binding pointing at a transcript born after this pane's claude
+    // launched belongs to a different, later-started session that happens to
+    // share the project dir — a mis-resolution that black-holes this topic and
+    // cross-routes the other session's replies here. Release it so we rebind to
+    // the pane's own file (and so the foreign file is freed for its real owner).
+    if (
+      isClaudeCli &&
+      binding?.jsonlPath &&
+      bindingIsForeignToPane(binding.jsonlPath, claudeStartMs)
+    ) {
+      console.log(
+        `[telegram/claude] topic ${topicId}: bound transcript postdates pane CLI start — releasing mis-resolved binding ${binding.jsonlPath}`
+      );
+      if (isClaudeTranscriptRunning(topicId)) stopClaudeTranscript(topicId);
+      await patchTopic(topicId, { jsonlPath: undefined, jsonlOffset: undefined });
+      binding = getTopic(topicId);
+    }
+
     // If Claude was restarted inside the same tmux session the bound JSONL is
     // now frozen and a fresh one is being written. Drop any watcher stuck on
     // the dead file and seed the next start with the live replacement. The
@@ -276,7 +297,7 @@ async function flushChat(
     // steal another session's transcript from the shared project dir.
     const liveReplacement =
       isClaudeCli && binding?.jsonlPath
-        ? findLiveReplacementJsonl(topicId, binding.jsonlPath, paneClaudeStartMs(sessionName))
+        ? findLiveReplacementJsonl(topicId, binding.jsonlPath, claudeStartMs)
         : null;
     if (liveReplacement && isClaudeTranscriptRunning(topicId)) {
       console.log(

@@ -178,6 +178,69 @@ function excludedJsonls(skipTopicId?: number): Set<string> {
   return set;
 }
 
+/**
+ * Read the timestamp of a transcript's first entry — the session's start
+ * time. Claude writes line one within milliseconds of launching, so this is a
+ * stable "born at" signal that, unlike file ctime, never moves on later
+ * appends. Returns null when the file is empty/unreadable or the first entry
+ * carries no parseable timestamp.
+ */
+function firstEntryTimestampMs(jsonl: string): number | null {
+  try {
+    const fd = fs.openSync(jsonl, "r");
+    const buf = Buffer.alloc(64 * 1024);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    const firstLine = buf
+      .toString("utf-8", 0, n)
+      .split("\n")
+      .find((l) => l.trim());
+    if (!firstLine) return null;
+    const entry = JSON.parse(firstLine) as { timestamp?: string };
+    const ms = entry.timestamp ? Date.parse(entry.timestamp) : Number.NaN;
+    return Number.isFinite(ms) ? ms : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when a topic's bound transcript cannot belong to that topic's pane.
+ *
+ * A claude process writes its transcript from the moment it launches, so a
+ * pane whose claude has been running since T owns a file born ~T. If the bound
+ * file was born well AFTER this pane's claude started — while that same claude
+ * is still the running one — the file is a different, later-launched session
+ * in the shared project dir. The binding was mis-resolved: it black-holes this
+ * topic and cross-routes the other session's replies here. The caller drops
+ * the watcher and clears the binding so it re-resolves to the pane's own file.
+ *
+ * The inverse (bound file OLDER than the pane's claude = an in-place restart)
+ * is NOT foreign — findLiveReplacementJsonl rotates forward for that. We only
+ * fire when the bound file is too NEW to be ours, behind a generous margin so
+ * ordinary clock skew or a slow first write never trips it. We rely solely on
+ * the first-entry timestamp (or birthtime); file ctime is unusable here since
+ * it advances on every append and would flag a long-lived own file as foreign.
+ */
+export function bindingIsForeignToPane(
+  currentJsonlPath: string,
+  claudeStartMs: number | null
+): boolean {
+  const FOREIGN_BIRTH_MARGIN_MS = 2 * 60 * 1000;
+  if (claudeStartMs === null) return false;
+  let bornMs = firstEntryTimestampMs(currentJsonlPath);
+  if (bornMs === null) {
+    try {
+      const s = fs.statSync(currentJsonlPath);
+      bornMs = s.birthtimeMs && s.birthtimeMs > 0 ? s.birthtimeMs : null;
+    } catch {
+      return false;
+    }
+  }
+  if (bornMs === null) return false;
+  return bornMs > claudeStartMs + FOREIGN_BIRTH_MARGIN_MS;
+}
+
 function normalizePrompt(text: string): string {
   return text.replace(/\r\n/g, "\n").trim();
 }
