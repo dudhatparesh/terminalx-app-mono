@@ -1,0 +1,19 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+# Copy gitignored local config into every new workspace. `.env*` is gitignored
+# (only `.env.example` is committed), so without this each workspace would start
+# with no real configuration. Runtime state (`.terminalx-secret`, `/data/`,
+# `.revoked-tokens.json`) is intentionally NOT copied — the app regenerates it.
+file_include_globs = ".env\n.env.local\n"
+
+[scripts]
+# node-pty and other native deps are built per-worktree, so each workspace needs
+# its own install. legacy-peer-deps is already set via .npmrc.
+setup = "npm install"
+
+# Custom server (server/index.ts) reads PORT from the environment. Bind each
+# workspace to its assigned Conductor port so multiple workspaces don't collide.
+run = "PORT=$CONDUCTOR_PORT npm run dev"
+
+# Each workspace runs on its own port, so several can run at once.
+run_mode = "concurrent"
