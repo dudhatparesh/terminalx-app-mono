@@ -36,6 +36,8 @@ export interface CreateSessionOptions {
     /** Repo-root-relative paths to symlink into the new worktree (heavy dirs). */
     symlinkPaths?: string[];
   };
+  /** Workspace config (feature #5): skip auto-running the setup script on create. */
+  skipSetup?: boolean;
 }
 
 interface UseSessionsReturn {
@@ -88,6 +90,7 @@ export function useSessions(): UseSessionsReturn {
             dangerouslySkipPermissions: options.dangerouslySkipPermissions,
             cwd: options.cwd,
             worktree: options.worktree,
+            skipSetup: options.skipSetup,
           }),
         });
         if (!res.ok) {

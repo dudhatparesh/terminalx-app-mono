@@ -19,6 +19,18 @@ export interface SessionMeta {
     /** Absolute paths inside the worktree linked/copied from the shared source. */
     linkedPaths?: string[];
   };
+
+  // --- Workspace config (feature #5) — all optional → backward compatible.
+  // Old data/ai-sessions.json records without these fields remain valid.
+  /** Per-workspace injected port. Conductor analog: CONDUCTOR_PORT. */
+  port?: number;
+  /** Setup run lifecycle for this workspace. */
+  setup?: {
+    status: "pending" | "running" | "succeeded" | "failed" | "skipped";
+    startedAt?: string;
+    finishedAt?: string;
+    exitCode?: number;
+  };
 }
 
 const DATA_DIR = path.join(process.cwd(), "data");

@@ -19,6 +19,11 @@ import { getEnsureTopic } from "@/lib/telegram/bot-bridge";
 import { getConfiguredMaxSessions } from "@/lib/security-config";
 import { assertNotSensitivePath, resolveSafePath } from "@/lib/file-service";
 import { createGitWorktreeForSession, removeGitWorktree } from "@/lib/git-worktree";
+// Workspace config (feature #5): resolve repo config, allocate a per-workspace
+// port, copy declared files into a fresh worktree, prefix env, run setup.
+import { resolveWorkspaceConfig, copyConfiguredFiles } from "@/lib/workspace-config";
+import { allocateWorkspacePort } from "@/lib/workspace-port";
+import { withWorkspaceEnv, runSetup } from "@/lib/workspace-setup";
 
 /**
  * Accept either an array of paths or a comma/newline-separated string from the
@@ -117,7 +122,8 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, kind, dangerouslySkipPermissions, cwd, worktree } = body;
+    // `skipSetup` (feature #5): let the dashboard create without auto-running setup.
+    const { name, kind, dangerouslySkipPermissions, cwd, worktree, skipSetup } = body;
 
     if (!name || typeof name !== "string") {
       return NextResponse.json({ error: "Missing or invalid session name" }, { status: 400 });
@@ -151,7 +157,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const command = commandForKind(sessionKind, {
+    const baseCommand = commandForKind(sessionKind, {
       dangerouslySkipPermissions: Boolean(dangerouslySkipPermissions),
     });
 
@@ -165,9 +171,13 @@ export async function POST(req: NextRequest) {
           linkedPaths: string[];
         }
       | undefined;
+    // Source checkout to copy declared files FROM (the dir the user selected,
+    // before it was rebased onto the worktree path).
+    let sourceCheckout: string | undefined;
     try {
       startDir = resolveSessionStartDir(cwd);
       if (worktree?.create === true) {
+        sourceCheckout = startDir;
         const symlinkPaths = normalizeSymlinkPaths(worktree.symlinkPaths);
         createdWorktree = createGitWorktreeForSession(
           startDir,
@@ -182,6 +192,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: worktree?.create === true ? message : error }, { status });
     }
 
+    // --- Workspace config (feature #5) -------------------------------------
+    // Resolve config for the repo backing this session, allocate a stable
+    // per-workspace port, copy declared files into a fresh worktree, and prefix
+    // the session command with the workspace env so the interactive shell
+    // inherits TERMINALX_PORT + config.env. Never throws on missing/malformed
+    // config — degrades to defaults.
+    const wsRepoRoot = createdWorktree?.repoRoot ?? startDir;
+    let port: number;
+    try {
+      port = await allocateWorkspacePort();
+    } catch {
+      // Port range exhausted — fail clearly so the user can widen the range.
+      if (createdWorktree) {
+        removeGitWorktree(createdWorktree.worktreePath, createdWorktree.repoRoot);
+      }
+      return NextResponse.json(
+        { error: "No free workspace port available — widen TERMINALX_PORT_RANGE" },
+        { status: 503 }
+      );
+    }
+    const wsConfig = resolveWorkspaceConfig(wsRepoRoot, { port });
+    if (createdWorktree && sourceCheckout) {
+      // Copy `.env`/`.env.local` "if you have one" into the new worktree.
+      copyConfiguredFiles(sourceCheckout, createdWorktree.worktreePath, wsConfig.copyFiles);
+    }
+    const wsEnv = { TERMINALX_PORT: String(port), ...wsConfig.env };
+    const command = baseCommand
+      ? withWorkspaceEnv(baseCommand, wsEnv)
+      : withWorkspaceEnv("exec bash -l", wsEnv);
+
     try {
       createSession(finalName, command ?? undefined, startDir);
     } catch (err) {
@@ -191,6 +231,9 @@ export async function POST(req: NextRequest) {
       throw err;
     }
 
+    // Setup auto-runs only on worktree creation with a configured setup script,
+    // unless the caller opted out via skipSetup.
+    const willRunSetup = Boolean(createdWorktree && wsConfig.setup && skipSetup !== true);
     await saveMeta({
       name: finalName,
       kind: sessionKind,
@@ -206,7 +249,20 @@ export async function POST(req: NextRequest) {
             linkedPaths: createdWorktree.linkedPaths,
           }
         : undefined,
+      port,
+      setup: wsConfig.setup ? { status: willRunSetup ? "pending" : "skipped" } : undefined,
     });
+
+    // Fire-and-stream the setup run (async). Status is polled via GET /api/sessions.
+    if (willRunSetup && createdWorktree && wsConfig.setup) {
+      void runSetup({
+        sessionName: finalName,
+        cwd: createdWorktree.worktreePath,
+        command: wsConfig.setup.command,
+        env: wsEnv,
+        timeoutSeconds: wsConfig.setup.timeoutSeconds ?? 1800,
+      });
+    }
     let telegramTopic: {
       topicId: number;
       sessionName: string;

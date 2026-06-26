@@ -6,6 +6,8 @@ import { Bot, ExternalLink, Save, Shield } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { EngineToggle } from "@/components/terminal/EngineToggle";
 import { MobileSection } from "@/components/settings/MobileSection";
+// Workspace config (feature #5): User/Repo scope tabs + Edit settings.toml.
+import { WorkspaceSettings } from "@/components/settings/WorkspaceSettings";
 import type { TelegramViewMode } from "@/hooks/useSessions";
 
 interface HealthInfo {
@@ -244,6 +246,9 @@ export function SettingsView() {
         <Section title="terminal engine" desc="reloads new tabs">
           <EngineToggle />
         </Section>
+
+        {/* Workspace config (feature #5) — its own card with User/Repo tabs. */}
+        <WorkspaceSettings />
 
         <Section title="mobile" desc="pair the terminalx mobile app">
           <MobileSection />

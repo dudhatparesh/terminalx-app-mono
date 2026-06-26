@@ -30,7 +30,11 @@ export type AuditEvent =
   | "pairing_code_created"
   | "pair_success"
   | "pair_failed"
-  | "device_revoked";
+  | "device_revoked"
+  // Workspace config (feature #5):
+  | "workspace_config_edited"
+  | "workspace_script_run"
+  | "workspace_setup_run";
 
 interface AuditEntry {
   timestamp: string;
