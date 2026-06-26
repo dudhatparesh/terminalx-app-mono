@@ -10,6 +10,8 @@ import { MobileSection } from "@/components/settings/MobileSection";
 import { HarnessTabs } from "@/components/settings/HarnessTabs";
 // Workspace config (feature #5): User/Repo scope tabs + Edit settings.toml.
 import { WorkspaceSettings } from "@/components/settings/WorkspaceSettings";
+// GitHub integration (feature #7): connect repos, tokens, webhooks.
+import { GitHubSettings } from "@/components/settings/GitHubSettings";
 import type { TelegramViewMode } from "@/hooks/useSessions";
 
 interface HealthInfo {
@@ -244,6 +246,8 @@ export function SettingsView() {
             </div>
           )}
         </Section>
+
+        <GitHubSettings />
 
         <Section title="terminal engine" desc="reloads new tabs">
           <EngineToggle />
