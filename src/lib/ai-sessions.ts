@@ -3,7 +3,10 @@ import * as path from "path";
 import { ensureSecureDir } from "./secure-dir";
 import { getSessionCreatedMs, isTerminalXMarkedSession, markTerminalXSession } from "./tmux";
 
-export type SessionKind = "bash" | "claude" | "codex";
+// Issue #4: SessionKind is now the OPEN id set sourced from the harness registry
+// (was the closed "bash" | "claude" | "codex" union). Existing ai-sessions.json
+// records stay valid since the legacy ids remain registry ids.
+export type SessionKind = string;
 
 export interface SessionMeta {
   name: string;
@@ -109,35 +112,10 @@ export function ensureManagedSession(name: string): boolean {
   }
 }
 
-const CLI_BINS: Record<SessionKind, string | null> = {
-  bash: null,
-  claude: "claude",
-  codex: "codex",
-};
-
-export interface CommandOptions {
-  dangerouslySkipPermissions?: boolean;
-}
-
-/**
- * Wrap the CLI invocation so tmux's session stays alive even if the CLI
- * exits (e.g., not installed, signed out, crashed). On exit we drop to an
- * interactive bash so the user can inspect the error and retry.
- *
- * `dangerouslySkipPermissions` only applies to `claude` and appends
- * --dangerously-skip-permissions so the CLI doesn't prompt for approvals.
- */
-export function commandForKind(kind: SessionKind, opts: CommandOptions = {}): string | null {
-  const bin = CLI_BINS[kind];
-  if (!bin) return null;
-  const args: string[] = [];
-  if (kind === "claude" && opts.dangerouslySkipPermissions) {
-    args.push("--dangerously-skip-permissions");
-  }
-  const invocation = [bin, ...args].join(" ");
-  return `bash -lc '${invocation}; ec=$?; echo; echo "[${bin} exited with code $ec — dropping to bash]"; exec bash -l'`;
-}
-
-export function isValidKind(kind: unknown): kind is SessionKind {
-  return kind === "bash" || kind === "claude" || kind === "codex";
-}
+// Issue #4: CLI_BINS / commandForKind / isValidKind moved into the harness
+// registry (src/lib/harnesses/*). These re-export shims keep every existing
+// import (the sessions API, etc.) working unchanged; commandForKind emits the
+// SAME bash -lc wrapper as before and isValidKind now accepts any registry id.
+export type { CommandOptions } from "./harnesses/types";
+export { isValidHarnessId as isValidKind } from "./harnesses/registry";
+export { commandForHarness as commandForKind } from "./harnesses/command";

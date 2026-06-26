@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Bot,
+  Boxes,
   ChevronUp,
+  Code,
   Copy,
   Folder,
   FolderOpen,
@@ -22,6 +24,9 @@ import {
   type TelegramViewMode,
   type TmuxSession,
 } from "@/hooks/useSessions";
+// Issue #4: harness registry drives the new-session kind toggle + icons so
+// adding cursor/opencode needs no dashboard edit.
+import { listHarnesses, getHarness } from "@/lib/harnesses/registry";
 
 function slugify(raw: string): string {
   // Preserve characters the session API already accepts (a-z 0-9 _ . -) so a
@@ -36,8 +41,11 @@ function slugify(raw: string): string {
 }
 
 function KindIcon({ kind }: { kind?: SessionKind }) {
+  // Issue #4: keep existing claude/codex mappings; add cursor/opencode.
   if (kind === "claude") return <Sparkles size={14} className="text-[#d58fff] shrink-0" />;
   if (kind === "codex") return <Bot size={14} className="text-[#5ccfe6] shrink-0" />;
+  if (kind === "cursor") return <Code size={14} className="text-[#7dd3fc] shrink-0" />;
+  if (kind === "opencode") return <Boxes size={14} className="text-[#ffa657] shrink-0" />;
   return <Terminal size={14} className="text-[#6b7569] shrink-0" />;
 }
 
@@ -65,6 +73,14 @@ function parentDirectory(path: string, root: string): string {
 
 function defaultBranchName(sessionName: string): string {
   return sessionName ? `feature/${sessionName}` : "feature/";
+}
+
+// Issue #4: data-driven check — does this harness expose the
+// dangerouslySkipPermissions option flag? (replaces the literal kind==="claude").
+function harnessSupportsSkipPermissions(kind: SessionKind): boolean {
+  return Boolean(
+    getHarness(kind)?.command.optionFlags?.some((f) => f.when === "dangerouslySkipPermissions")
+  );
 }
 
 function branchLooksValid(branch: string): boolean {
@@ -288,7 +304,9 @@ export function DashboardView() {
             .filter(Boolean)
         : [];
     const session = await createSession(n, kind, {
-      dangerouslySkipPermissions: kind === "claude" ? skipPermissions : undefined,
+      dangerouslySkipPermissions: harnessSupportsSkipPermissions(kind)
+        ? skipPermissions
+        : undefined,
       cwd: directoryPath,
       worktree: createWorktree
         ? { create: true, branch, symlinkPaths: symlinkShared ? sharedPaths : undefined }
@@ -469,25 +487,35 @@ export function DashboardView() {
               <span className="block text-[10px] uppercase tracking-wider text-[#6b7569] mb-1.5">
                 session kind
               </span>
-              <div className="flex rounded bg-[#07080c] border border-[#1a1d24] p-0.5">
-                {(
-                  [
-                    { value: "bash", label: "bash", color: "#00cc6e" },
-                    { value: "claude", label: "claude", color: "#d58fff" },
-                    { value: "codex", label: "codex", color: "#5ccfe6" },
-                  ] as const
-                ).map((k) => (
+              {/* Issue #4: registry-driven harness toggle (bash/claude/codex/cursor/opencode). */}
+              <div
+                data-testid="session-harness-toggle"
+                className="flex flex-wrap rounded bg-[#07080c] border border-[#1a1d24] p-0.5"
+              >
+                {listHarnesses().map((h) => (
                   <button
-                    key={k.value}
-                    onClick={() => setKind(k.value)}
-                    className={`flex-1 px-2 py-1 rounded text-[11px] transition-colors ${
-                      kind === k.value
+                    key={h.id}
+                    data-testid={`session-harness-${h.id}`}
+                    onClick={() => setKind(h.id)}
+                    className={`flex-1 inline-flex items-center justify-center gap-1 px-2 py-1 rounded text-[11px] transition-colors ${
+                      kind === h.id
                         ? "text-[#05060a] font-medium"
                         : "text-[#6b7569] hover:text-[#e6f0e4]"
                     }`}
-                    style={{ background: kind === k.value ? k.color : "transparent" }}
+                    style={{ background: kind === h.id ? h.color : "transparent" }}
                   >
-                    {k.label}
+                    {h.label}
+                    {h.badge === "NEW" && (
+                      <span
+                        className={`px-1 text-[8px] uppercase tracking-wider rounded leading-none ${
+                          kind === h.id
+                            ? "bg-[#05060a]/20 text-[#05060a]"
+                            : "bg-[#ffa657]/20 text-[#ffa657]"
+                        }`}
+                      >
+                        NEW
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -676,8 +704,9 @@ export function DashboardView() {
               </div>
             )}
 
-            {kind === "claude" && (
+            {harnessSupportsSkipPermissions(kind) && (
               <label
+                data-testid="session-skip-permissions"
                 className={`mt-3 flex items-start gap-2 px-2 py-1.5 rounded border cursor-pointer transition-colors ${
                   skipPermissions
                     ? "bg-[#ff5c5c]/10 border-[#ff5c5c]/50"
