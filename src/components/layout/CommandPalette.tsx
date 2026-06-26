@@ -1,9 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useSessions } from "@/hooks/useSessions";
 import { useAuth } from "@/hooks/useAuth";
+// Workspace config (feature #5): surface run scripts + "run setup" for the
+// active workspace in the command palette.
+import {
+  useWorkspaceConfig,
+  executeRunScript,
+  runWorkspaceSetup,
+} from "@/hooks/useWorkspaceConfig";
 
 interface Item {
   id: string;
@@ -19,11 +26,19 @@ interface CommandPaletteProps {
 
 export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const { sessions } = useSessions();
   const { logout } = useAuth();
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Derive the active workspace session from the route (/workspace/<name>).
+  const activeSession = useMemo(() => {
+    const m = pathname?.match(/^\/workspace\/([^/]+)/);
+    return m ? decodeURIComponent(m[1]!) : null;
+  }, [pathname]);
+  const { config: workspaceConfig } = useWorkspaceConfig(activeSession);
 
   useEffect(() => {
     if (open) {
@@ -57,8 +72,34 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       hint: s.kind ? s.kind : undefined,
       action: go(`/workspace/${encodeURIComponent(s.name)}`),
     }));
-    return [...attachItems, ...base];
-  }, [sessions, router, onClose, logout]);
+
+    // Run scripts for the active workspace surface as `run · <name>` entries.
+    const runItems: Item[] =
+      activeSession && workspaceConfig
+        ? workspaceConfig.scripts.map((s) => ({
+            id: `run-${s.name}`,
+            label: `run · ${s.name}`,
+            hint: s.description ?? "script",
+            action: () => {
+              onClose();
+              void executeRunScript(activeSession, s.name);
+            },
+          }))
+        : [];
+    if (activeSession && workspaceConfig?.setup) {
+      runItems.push({
+        id: "workspace-run-setup",
+        label: "workspace · run setup",
+        hint: "setup",
+        action: () => {
+          onClose();
+          void runWorkspaceSetup(activeSession);
+        },
+      });
+    }
+
+    return [...attachItems, ...runItems, ...base];
+  }, [sessions, router, onClose, logout, activeSession, workspaceConfig]);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();

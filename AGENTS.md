@@ -39,15 +39,25 @@ REST APIs in Next.js App Router (`src/app/api/`):
 
 All via environment variables:
 
-| Variable                | Default                 | Description                 |
-| ----------------------- | ----------------------- | --------------------------- |
-| `PORT`                  | `3000`                  | Server port                 |
-| `TERMINUS_ROOT`         | `$HOME`                 | File browser root directory |
-| `TERMINUS_SHELL`        | `$SHELL` or `/bin/bash` | Default shell               |
-| `TERMINUS_READ_ONLY`    | `false`                 | Disable file writes         |
-| `TERMINUS_SCROLLBACK`   | `10000`                 | Terminal scrollback lines   |
-| `TERMINUS_MAX_SESSIONS` | `20`                    | Max concurrent PTY sessions |
-| `TERMINUS_LOG_PATHS`    | `/var/log,~/.pm2/logs`  | Log directories             |
+| Variable                | Default                 | Description                                                                                     |
+| ----------------------- | ----------------------- | ----------------------------------------------------------------------------------------------- |
+| `PORT`                  | `3000`                  | Server port                                                                                     |
+| `TERMINUS_ROOT`         | `$HOME`                 | File browser root directory                                                                     |
+| `TERMINUS_SHELL`        | `$SHELL` or `/bin/bash` | Default shell                                                                                   |
+| `TERMINUS_READ_ONLY`    | `false`                 | Disable file writes                                                                             |
+| `TERMINUS_SCROLLBACK`   | `10000`                 | Terminal scrollback lines                                                                       |
+| `TERMINUS_MAX_SESSIONS` | `20`                    | Max concurrent PTY sessions                                                                     |
+| `TERMINUS_LOG_PATHS`    | `/var/log,~/.pm2/logs`  | Log directories                                                                                 |
+| `TERMINALX_PORT_BASE`   | `4100`                  | First port in the per-workspace allocation range (Conductor analog: `CONDUCTOR_PORT` pool base) |
+| `TERMINALX_PORT_RANGE`  | `900`                   | Size of the per-workspace port range (`4100`–`4999` by default)                                 |
+
+Workspace config (feature #5): a committed `.terminalx/settings.toml` at the
+repo root declares a setup script, named run scripts, env vars, the default
+session kind, and files to copy into a fresh worktree (`.env` "if you have
+one"). Each managed workspace gets a unique injected `TERMINALX_PORT` (the
+`CONDUCTOR_PORT` analog). `TERMINALX_PORT` is **not** a server config var — it
+is the per-workspace value injected into each session. See
+`docs/conductor-parity/designs/workspace-config.spec.md`.
 
 ## Tech Stack
 

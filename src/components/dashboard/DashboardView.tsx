@@ -27,6 +27,8 @@ import {
 // Issue #4: harness registry drives the new-session kind toggle + icons so
 // adding cursor/opencode needs no dashboard edit.
 import { listHarnesses, getHarness } from "@/lib/harnesses/registry";
+// Workspace config (feature #5): default kind + setup summary in the dialog.
+import { useWorkspaceConfig } from "@/hooks/useWorkspaceConfig";
 
 function slugify(raw: string): string {
   // Preserve characters the session API already accepts (a-z 0-9 _ . -) so a
@@ -217,7 +219,22 @@ export function DashboardView() {
   const [symlinkPaths, setSymlinkPaths] = useState("node_modules");
   const [createError, setCreateError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Workspace config (feature #5): run-setup-on-create + kind-from-config.
+  const [runSetupOnCreate, setRunSetupOnCreate] = useState(true);
+  const [kindTouched, setKindTouched] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Resolve workspace config for the selected repo (when the dir is a git repo).
+  const { config: workspaceConfig } = useWorkspaceConfig(
+    showDialog && gitInfo.isRepo && gitInfo.root ? { repoRoot: gitInfo.root } : null
+  );
+
+  // Default the kind selector to config.defaultKind unless the user picked one.
+  useEffect(() => {
+    if (workspaceConfig && !kindTouched) {
+      setKind(workspaceConfig.defaultKind);
+    }
+  }, [workspaceConfig, kindTouched]);
 
   const live = sessions.filter((s) => s.attached).length;
   const idle = sessions.length - live;
@@ -267,6 +284,8 @@ export function DashboardView() {
     setSymlinkShared(false);
     setSymlinkPaths("node_modules");
     setCreateError(null);
+    setRunSetupOnCreate(true);
+    setKindTouched(false);
     setShowDialog(true);
     void loadDirectories(".");
     setTimeout(() => inputRef.current?.focus(), 50);
@@ -311,6 +330,8 @@ export function DashboardView() {
       worktree: createWorktree
         ? { create: true, branch, symlinkPaths: symlinkShared ? sharedPaths : undefined }
         : undefined,
+      // Only meaningful when a worktree + setup script exist; server enforces.
+      skipSetup: !runSetupOnCreate,
     });
     if (session) {
       setShowDialog(false);
@@ -329,6 +350,7 @@ export function DashboardView() {
     sessions,
     createSession,
     router,
+    runSetupOnCreate,
   ]);
 
   const copyAttachUrl = useCallback(() => {
@@ -496,7 +518,12 @@ export function DashboardView() {
                   <button
                     key={h.id}
                     data-testid={`session-harness-${h.id}`}
-                    onClick={() => setKind(h.id)}
+                    onClick={() => {
+                      // Issue #4: registry id is the session kind.
+                      setKind(h.id);
+                      // Feature #5: a manual pick wins over the repo default-kind.
+                      setKindTouched(true);
+                    }}
                     className={`flex-1 inline-flex items-center justify-center gap-1 px-2 py-1 rounded text-[11px] transition-colors ${
                       kind === h.id
                         ? "text-[#05060a] font-medium"
@@ -519,7 +546,53 @@ export function DashboardView() {
                   </button>
                 ))}
               </div>
+              {workspaceConfig?.hasRepoConfig &&
+                workspaceConfig.provenance.defaultKind === "repo" && (
+                  <span className="mt-1 block text-[9px] text-[#6b7569]">
+                    default kind from repo settings.toml
+                  </span>
+                )}
             </div>
+
+            {/* Workspace config summary (feature #5) — only when a repo is selected. */}
+            {workspaceConfig && gitInfo.isRepo && (
+              <div
+                data-testid="workspace-config-summary"
+                className="mt-3 rounded border border-[#1a1d24] bg-[#07080c] px-2.5 py-2 text-[10px] text-[#a8b3a6] space-y-1.5"
+              >
+                <div className="flex items-center gap-1.5 text-[#6b7569]">
+                  <span className="uppercase tracking-wider">workspace</span>
+                  {workspaceConfig.hasRepoConfig ? (
+                    <span className="text-[#00ff88]">.terminalx/settings.toml</span>
+                  ) : (
+                    <span>defaults (no committed config)</span>
+                  )}
+                </div>
+                <div className="font-mono text-[#a8b3a6]">
+                  will copy: {workspaceConfig.copyFiles.join(" · ") || "—"} • inject TERMINALX_PORT
+                </div>
+                {workspaceConfig.setup && createWorktree && (
+                  <label className="flex items-center gap-2 text-[10px] text-[#a8b3a6]">
+                    <input
+                      type="checkbox"
+                      data-testid="new-session-run-setup"
+                      checked={runSetupOnCreate}
+                      onChange={(e) => setRunSetupOnCreate(e.target.checked)}
+                      className="accent-[#00ff88]"
+                    />
+                    run setup on create:{" "}
+                    <span className="font-mono text-[#e6f0e4] truncate">
+                      {workspaceConfig.setup.command}
+                    </span>
+                  </label>
+                )}
+                {workspaceConfig.scripts.length > 0 && (
+                  <div className="text-[#6b7569]" data-testid="workspace-summary-scripts">
+                    run scripts: {workspaceConfig.scripts.map((s) => s.name).join(" · ")}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="mt-3">
               <div className="flex items-center justify-between mb-1.5">
