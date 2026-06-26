@@ -6,6 +6,7 @@ import { Bot, ExternalLink, Save, Shield } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { EngineToggle } from "@/components/terminal/EngineToggle";
 import { MobileSection } from "@/components/settings/MobileSection";
+import { GitHubSettings } from "@/components/settings/GitHubSettings";
 import type { TelegramViewMode } from "@/hooks/useSessions";
 
 interface HealthInfo {
@@ -240,6 +241,8 @@ export function SettingsView() {
             </div>
           )}
         </Section>
+
+        <GitHubSettings />
 
         <Section title="terminal engine" desc="reloads new tabs">
           <EngineToggle />
