@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export type SessionKind = "bash" | "claude" | "codex";
+// Issue #4: SessionKind is now the open harness-registry id set, sourced from a
+// single shared (client-safe) place instead of being redeclared here. Both the
+// server (ai-sessions.ts) and this client hook route through the registry so
+// the type can never drift.
+export type SessionKind = string;
 export type TelegramViewMode = "chat" | "screen" | "off";
 
 export interface TmuxSession {

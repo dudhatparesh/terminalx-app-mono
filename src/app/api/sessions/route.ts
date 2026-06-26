@@ -12,6 +12,9 @@ import {
   isValidKind,
   ensureManagedSession,
 } from "@/lib/ai-sessions";
+// Issue #4: validation message is now sourced from the harness registry so new
+// harnesses (cursor/opencode) need no edit here.
+import { listHarnesses } from "@/lib/harnesses/registry";
 import { listTopics } from "@/lib/telegram/state";
 import { botIsConfigured, type BotIdentity } from "@/lib/telegram/auth";
 import { ensureTopicForSession } from "@/lib/telegram/bot";
@@ -132,8 +135,12 @@ export async function POST(req: NextRequest) {
 
     const sessionKind = kind === undefined ? "bash" : kind;
     if (!isValidKind(sessionKind)) {
+      // Issue #4: dynamic list from the registry instead of a hard-coded string.
+      const ids = listHarnesses()
+        .map((h) => h.id)
+        .join(", ");
       return NextResponse.json(
-        { error: "Invalid session kind: expected bash, claude, or codex" },
+        { error: `Invalid session kind: expected one of ${ids}` },
         { status: 400 }
       );
     }
