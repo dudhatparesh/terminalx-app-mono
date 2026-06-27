@@ -12,6 +12,8 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { ensureSecureDir } from "../secure-dir";
+import type { ConfiguredOpenCodeProvider } from "./opencode-providers";
 
 export interface HarnessSettings {
   /** Default harness id for new sessions in this scope ([defaults] harness). */
@@ -144,4 +146,177 @@ export function resolveHarnessSettings(repoRoot?: string): HarnessSettings {
       : user.opencodeProviders,
     opencodeModels: repo.opencodeModels.length ? repo.opencodeModels : user.opencodeModels,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #8: write/read the OpenCode provider config (the [harness.opencode]
+// providers/models keys §6.3). NON-SECRET keys ONLY — TerminalX never persists
+// a provider secret here (spec §6, AC-7/AC-10). The picker's "Add provider"
+// flow upserts the provider id (+ enabled models, + gateway endpoint) into the
+// scoped settings.toml; "Remove" deletes it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Keys this module is allowed to write under [harness.opencode]. NO secret keys. */
+type OpenCodeBlock = { bin?: string; providers: string[]; models: string[] };
+
+function quote(s: string): string {
+  // Minimal TOML string escaping for the constrained values we write
+  // (provider ids, model ids, endpoint URLs). Escape backslash + double-quote.
+  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function arr(values: string[]): string {
+  return `[${values.map(quote).join(", ")}]`;
+}
+
+/** Render the canonical [harness.opencode] block (sorted-stable, dedup'd). */
+function renderOpenCodeBlock(block: OpenCodeBlock): string {
+  const lines = ["[harness.opencode]"];
+  if (block.bin !== undefined) lines.push(`bin = ${quote(block.bin)}`);
+  lines.push(`providers = ${arr(block.providers)}`);
+  lines.push(`models = ${arr(block.models)}`);
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Replace (or insert) the [harness.opencode] table in `text` with `block`,
+ * preserving every other table verbatim. We slice out the existing block by
+ * locating its header and the next top-level [header], then splice the rendered
+ * block in its place (or append it when absent).
+ */
+function spliceOpenCodeBlock(text: string, block: OpenCodeBlock): string {
+  const lines = text.split("\n");
+  const headerRe = /^\s*\[([^\]]+)\]\s*$/;
+  let start = -1;
+  let end = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i]?.match(headerRe);
+    if (!m) continue;
+    const table = (m[1] ?? "").trim();
+    if (start === -1) {
+      if (table === "harness.opencode") start = i;
+    } else {
+      // first header after the block we're replacing
+      end = i;
+      break;
+    }
+  }
+
+  const rendered = renderOpenCodeBlock(block).replace(/\n$/, "");
+
+  if (start === -1) {
+    // No existing block — append (with a separating blank line if needed).
+    const base = text.replace(/\s*$/, "");
+    return (base ? base + "\n\n" : "") + rendered + "\n";
+  }
+
+  const before = lines.slice(0, start);
+  const after = lines.slice(end);
+  const merged = [...before, ...rendered.split("\n"), ...after].join("\n");
+  // Collapse 3+ blank lines that splicing may introduce.
+  return merged.replace(/\n{3,}/g, "\n\n").replace(/\s*$/, "") + "\n";
+}
+
+/**
+ * Upsert a configured OpenCode provider into raw settings.toml content. Adds the
+ * provider id (dedup'd, order-preserving) and unions its `models` into the
+ * block's models. Returns the new TOML string. Pure (no fs).
+ */
+export function upsertOpenCodeProviderToml(
+  text: string,
+  provider: ConfiguredOpenCodeProvider
+): string {
+  const current = parseHarnessSettings(text);
+  const providers = current.opencodeProviders.slice();
+  if (!providers.includes(provider.providerId)) providers.push(provider.providerId);
+
+  const models = current.opencodeModels.slice();
+  for (const m of provider.models ?? []) {
+    if (m && !models.includes(m)) models.push(m);
+  }
+
+  return spliceOpenCodeBlock(text, {
+    bin: current.opencodeBin,
+    providers,
+    models,
+  });
+}
+
+/** Remove a configured OpenCode provider id from raw settings.toml content. Pure. */
+export function removeOpenCodeProviderToml(text: string, providerId: string): string {
+  const current = parseHarnessSettings(text);
+  const providers = current.opencodeProviders.filter((p) => p !== providerId);
+  return spliceOpenCodeBlock(text, {
+    bin: current.opencodeBin,
+    providers,
+    models: current.opencodeModels,
+  });
+}
+
+/** Resolve the settings.toml path for a scope. */
+function scopedSettingsPath(scope: "user" | "repo", repoRoot?: string): string {
+  if (scope === "repo") {
+    if (!repoRoot) throw new Error("repoRoot is required for repo scope");
+    return repoSettingsPath(repoRoot);
+  }
+  return userSettingsPath();
+}
+
+function readFileOrEmpty(file: string): string {
+  try {
+    return fs.readFileSync(file, "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+/** The non-secret OpenCode config surfaced to the UI counts. */
+export interface OpenCodeProviderConfig {
+  providers: string[];
+  models: string[];
+  bin?: string;
+}
+
+/** Read the [harness.opencode] providers/models for a scope (degrades to empty). */
+export function readOpenCodeProviderConfig(
+  repoRoot?: string,
+  scope: "user" | "repo" = "repo"
+): OpenCodeProviderConfig {
+  const s = loadHarnessSettingsFile(scopedSettingsPath(scope, repoRoot));
+  return { providers: s.opencodeProviders, models: s.opencodeModels, bin: s.opencodeBin };
+}
+
+/**
+ * Persist a configured provider to the scoped settings.toml (creating the
+ * .terminalx dir as needed). Writes ONLY non-secret keys. The committed repo
+ * file is mode 0644 (it is checked in); the user file is 0600 in a 0700 dir.
+ */
+export function writeOpenCodeProviderConfig(
+  provider: ConfiguredOpenCodeProvider,
+  repoRoot?: string
+): void {
+  const file = scopedSettingsPath(provider.scope, repoRoot);
+  const next = upsertOpenCodeProviderToml(readFileOrEmpty(file), provider);
+  ensureSecureDir(path.dirname(file));
+  const mode = provider.scope === "repo" ? 0o644 : 0o600;
+  const tmp = file + ".tmp";
+  fs.writeFileSync(tmp, next, { encoding: "utf-8", mode });
+  fs.renameSync(tmp, file);
+}
+
+/** Remove a configured provider from the scoped settings.toml. */
+export function removeOpenCodeProviderConfig(
+  providerId: string,
+  repoRoot?: string,
+  scope: "user" | "repo" = "repo"
+): void {
+  const file = scopedSettingsPath(scope, repoRoot);
+  const existing = readFileOrEmpty(file);
+  if (!existing) return; // nothing to remove
+  const next = removeOpenCodeProviderToml(existing, providerId);
+  ensureSecureDir(path.dirname(file));
+  const mode = scope === "repo" ? 0o644 : 0o600;
+  const tmp = file + ".tmp";
+  fs.writeFileSync(tmp, next, { encoding: "utf-8", mode });
+  fs.renameSync(tmp, file);
 }

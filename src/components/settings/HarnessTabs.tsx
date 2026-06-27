@@ -9,10 +9,11 @@
 //  - hostsProviders (opencode) → the OpenCodePanel.
 // Tabs/controls carry data-testids so e2e is robust.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { KeyRound, Play, Terminal } from "lucide-react";
 import { ScopeTabs, type HarnessScope } from "@/components/settings/ScopeTabs";
 import { OpenCodePanel } from "@/components/settings/OpenCodePanel";
+import { useSessions } from "@/hooks/useSessions";
 
 export interface HarnessStatusApi {
   id: string;
@@ -130,6 +131,14 @@ export function HarnessTabs() {
   const [scope, setScope] = useState<HarnessScope>("user");
   const [loginMsg, setLoginMsg] = useState<string | null>(null);
 
+  // Repo scope resolves against the first worktree-backed session (mirrors
+  // WorkspaceSettings); the server turns the session name into a repo root.
+  const { sessions } = useSessions();
+  const repoSession = useMemo(
+    () => sessions.find((s) => s.worktree?.repoRoot || s.cwd)?.name ?? null,
+    [sessions]
+  );
+
   // Apply a fetched harness list (shared by the initial load + Refresh).
   const apply = useCallback((list: HarnessApi[]) => {
     setHarnesses(list);
@@ -221,7 +230,12 @@ export function HarnessTabs() {
       {current && (
         <div data-testid={`harness-panel-${current.id}`}>
           {current.hostsProviders ? (
-            <OpenCodePanel harness={current} onRefresh={load} />
+            <OpenCodePanel
+              harness={current}
+              scope={scope}
+              repoSession={repoSession}
+              onRefresh={load}
+            />
           ) : (
             <div>
               <div className="flex items-center gap-2 mb-3">

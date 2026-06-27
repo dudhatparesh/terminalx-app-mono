@@ -5,25 +5,59 @@
 // ("N selected"), and a collapsible Advanced block with an install/version
 // pill, Open-in-Finder, Docs, Refresh, and the executable-path override.
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, FolderOpen, Plus, RefreshCw } from "lucide-react";
 import { ProvidersPickerModal } from "@/components/settings/ProvidersPickerModal";
+import type { HarnessScope } from "@/components/settings/ScopeTabs";
 import type { HarnessApi } from "@/components/settings/HarnessTabs";
 
 export function OpenCodePanel({
   harness,
+  scope,
+  repoSession,
   onRefresh,
 }: {
   harness: HarnessApi;
+  /** Active settings scope (User | Repo) — drives where providers persist. */
+  scope: HarnessScope;
+  /** When repo-scoped, the session whose repo backs the config write. */
+  repoSession?: string | null;
   onRefresh: () => void;
 }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [showProviders, setShowProviders] = useState(false);
   const [execPath, setExecPath] = useState("");
+  // Configured providers / selected models for the current scope (drives the
+  // "N configured" / "N selected" labels, AC-11).
+  const [configuredCount, setConfiguredCount] = useState(0);
+  const [selectedModelCount, setSelectedModelCount] = useState(0);
 
   const status = harness.status;
   const installed = status?.installed;
   const version = status?.version;
+
+  // Load the scoped configured providers + selected models from the API.
+  const loadConfigured = useCallback(async () => {
+    const params = new URLSearchParams({ configured: "1", scope });
+    if (scope === "repo" && repoSession) params.set("session", repoSession);
+    try {
+      const res = await fetch(`/api/harnesses/opencode/providers?${params.toString()}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setConfiguredCount(Number(data?.configuredCount ?? 0));
+      setSelectedModelCount(Number(data?.selectedModelCount ?? 0));
+    } catch {
+      /* best-effort: leave counts as-is */
+    }
+  }, [scope, repoSession]);
+
+  useEffect(() => {
+    // Fetch-then-setState (the state update happens after the awaited fetch, in
+    // a callback — the recommended "subscribe to an external system" shape, same
+    // as HarnessTabs' load effect). loadConfigured is reused by onConfigured.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadConfigured();
+  }, [loadConfigured]);
 
   const openInFinder = async () => {
     await fetch("/api/harnesses", { method: "GET" }).catch(() => {});
@@ -58,14 +92,16 @@ export function OpenCodePanel({
       >
         <div className="min-w-0">
           <div className="text-[11px] text-[#e6f0e4]">Providers</div>
-          <div className="text-[10px] text-[#6b7569]">0 configured</div>
+          <div data-testid="opencode-providers-count" className="text-[10px] text-[#6b7569]">
+            {configuredCount} configured
+          </div>
         </div>
         <button
           data-testid="opencode-add-provider"
           onClick={() => setShowProviders(true)}
           className="inline-flex items-center gap-1.5 rounded border border-[#ffa657]/60 bg-[#ffa657]/10 px-2.5 py-1 text-[11px] text-[#ffa657] hover:bg-[#ffa657]/20 transition-colors"
         >
-          <Plus size={11} /> Add your first provider
+          <Plus size={11} /> {configuredCount > 0 ? "Add provider" : "Add your first provider"}
         </button>
       </div>
 
@@ -76,7 +112,9 @@ export function OpenCodePanel({
       >
         <div className="min-w-0">
           <div className="text-[11px] text-[#e6f0e4]">Models</div>
-          <div className="text-[10px] text-[#6b7569]">0 selected</div>
+          <div data-testid="opencode-models-count" className="text-[10px] text-[#6b7569]">
+            {selectedModelCount} selected
+          </div>
         </div>
         <button
           data-testid="opencode-add-model"
@@ -160,7 +198,17 @@ export function OpenCodePanel({
         )}
       </div>
 
-      {showProviders && <ProvidersPickerModal onClose={() => setShowProviders(false)} />}
+      {showProviders && (
+        <ProvidersPickerModal
+          scope={scope}
+          repoSession={repoSession}
+          onClose={() => setShowProviders(false)}
+          onConfigured={() => {
+            // Refresh the scoped counts after a successful add (AC-11).
+            void loadConfigured();
+          }}
+        />
+      )}
     </div>
   );
 }
