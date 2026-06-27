@@ -5,7 +5,7 @@
 // ReviewPanel's narrow column (no modal, no second sidebar). All GitHub data is
 // fetched via the session-scoped API routes; drafts persist server-side. Dark-
 // themed to match ReviewStatusBar / ReviewPanel. NO Node imports.
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertCircle,
   ChevronDown,
@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { usePrReview, type UsePrReview } from "@/hooks/usePrReview";
 import { usePrReviewDrafts } from "@/hooks/usePrReviewDrafts";
+import { overlayLiveDrafts } from "@/lib/pr-review/merge";
 import type {
   MergedThread,
   ReviewDecision,
@@ -67,6 +68,14 @@ export function ReviewTab({
   const dialogOpen = extDialogOpen ?? internalOpen;
   const setDialogOpen = onDialogOpenChange ?? setInternalOpen;
 
+  // Overlay the LIVE local drafts onto the snapshot model so a NEW top-level line
+  // comment (authored from the Changes tab) surfaces here as a draft thread
+  // immediately — even before a PR exists (#3).
+  const liveByFile = useMemo(
+    () => overlayLiveDrafts(model?.byFile ?? [], drafts.drafts),
+    [model?.byFile, drafts.drafts]
+  );
+
   if (!session) {
     return (
       <Empty testid="review-no-session" title="No session selected">
@@ -106,12 +115,43 @@ export function ReviewTab({
   }
 
   // No PR yet → Create-PR empty state (mirrors the status-bar affordance, §2.2/§5).
+  // Local drafts (e.g. a NEW inline comment authored on a diff line) still surface
+  // here as pending draft threads even before a PR exists (#3).
   if (!model.pr) {
+    const draftGroups = liveByFile.filter((g) => g.threads.length > 0);
     return (
-      <>
+      <div data-testid="review-tab" className="flex h-full flex-col overflow-y-auto">
+        {draftGroups.length > 0 && (
+          <div
+            data-testid="review-pending-drafts"
+            className="flex flex-col border-b border-[#1a1d24]"
+          >
+            <DraftBanner
+              count={drafts.count}
+              onSubmit={(event, body) => submitReview(event, body)}
+            />
+            {draftGroups.map((group) => (
+              <FileThreadGroup
+                key={group.path}
+                group={group}
+                onReply={(thread, body) =>
+                  drafts.upsert({
+                    path: thread.path,
+                    line: thread.line,
+                    side: thread.side,
+                    inReplyToId: thread.comments[0]?.id,
+                    body,
+                  })
+                }
+                onResolve={(thread, resolved) => void setResolved(thread.key, resolved)}
+                onDiscardDraft={(id) => void drafts.discard(id)}
+              />
+            ))}
+          </div>
+        )}
         <div
           data-testid="review-no-pr"
-          className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
+          className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
         >
           <Eye size={20} className="text-[#3f4a3d]" />
           {model.unbound ? (
@@ -148,11 +188,11 @@ export function ReviewTab({
           defaultBase={model.defaultBase || "main"}
           onCreate={createPr}
         />
-      </>
+      </div>
     );
   }
 
-  const hasActivity = model.byFile.length > 0 || model.reviews.length > 0;
+  const hasActivity = liveByFile.length > 0 || model.reviews.length > 0;
   const mergedMerged = mergeDraftCount(model, drafts.count);
 
   return (
@@ -172,7 +212,7 @@ export function ReviewTab({
         </div>
       ) : (
         <div className="flex flex-col">
-          {model.byFile.map((group) => (
+          {liveByFile.map((group) => (
             <FileThreadGroup
               key={group.path}
               group={group}
