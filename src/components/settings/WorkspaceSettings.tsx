@@ -94,7 +94,7 @@ export function WorkspaceSettings() {
     >
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-baseline gap-3">
-          <h2 className="text-[13px] font-medium text-[#e6f0e4]">workspace</h2>
+          <h2 className="text-[13px] font-medium text-[#e6f0e4]">project</h2>
           <span className="text-[10px] text-[#6b7569]">setup · run scripts · injected port</span>
         </div>
         {scope === "repo" && repoSession && (

@@ -4,10 +4,10 @@ import * as os from "os";
 import * as path from "path";
 import { execFileSync } from "child_process";
 
-// DELETE /api/workspaces/[id] cleanup (issue #9): deleting a WORKSPACE removes
-// each worktree (removeGitWorktree) AND prunes its recordings under
+// DELETE /api/projects/[id] cleanup (issue #9): deleting a PROJECT removes each
+// workspace (removeGitWorktree) AND prunes its recordings under
 // data/recordings/. This is the confirmed-delete path — distinct from archiving
-// a single worktree (which keeps recordings). The store captures cwd at module
+// a single workspace (which keeps recordings). The store captures cwd at module
 // load, so we chdir into a tmp repo and load fresh modules.
 
 const ADMIN = { "x-username": "admin", "x-user-role": "admin" };
@@ -42,7 +42,7 @@ function writeRecording(cwd: string, fileBase: string, sessionId: string): strin
 
 const describeGit = hasGit() ? describe : describe.skip;
 
-describeGit("DELETE /api/workspaces/[id] prunes recordings (issue #9)", () => {
+describeGit("DELETE /api/projects/[id] prunes recordings (issue #9)", () => {
   let cwd: string;
   let prevCwd: string;
   let repoDir: string;
@@ -70,7 +70,7 @@ describeGit("DELETE /api/workspaces/[id] prunes recordings (issue #9)", () => {
     delete process.env.TERMINALX_WORKTREES_ROOT;
   });
 
-  it("removes the worktree + prunes its recordings, then drops the workspace", async () => {
+  it("removes the worktree + prunes its recordings, then drops the project", async () => {
     vi.resetModules();
     const { createGitWorktreeForSession } = await import("@/lib/git-worktree");
     const created = createGitWorktreeForSession(repoDir, "feature/del");
@@ -86,37 +86,37 @@ describeGit("DELETE /api/workspaces/[id] prunes recordings (issue #9)", () => {
         linkedPaths: created.linkedPaths,
       },
     });
-    const { registerWorkspace } = await import("@/lib/workspaces/store");
-    const ws = await registerWorkspace({ directory: repoDir });
+    const { registerProject } = await import("@/lib/projects/store");
+    const proj = await registerProject({ directory: repoDir });
 
-    // A recording for the worktree session + an unrelated one that must survive.
+    // A recording for the workspace session + an unrelated one that must survive.
     const mine = writeRecording(cwd, "wt-del-1700000000000", "wt-del");
     const other = writeRecording(cwd, "keep-1700000000000", "keep");
 
     vi.resetModules();
-    const route = await import("@/app/api/workspaces/[id]/route");
+    const route = await import("@/app/api/projects/[id]/route");
     const res = await route.DELETE(mockReq(ADMIN), {
-      params: Promise.resolve({ id: ws.id }),
+      params: Promise.resolve({ id: proj.id }),
     });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.removedWorktrees).toBe(1);
+    expect(body.removedWorkspaces).toBe(1);
 
     // Worktree removed on disk, recording pruned, unrelated recording kept.
     expect(fs.existsSync(created.worktreePath)).toBe(false);
     expect(fs.existsSync(mine)).toBe(false);
     expect(fs.existsSync(other)).toBe(true);
 
-    // Workspace + session metadata dropped.
-    const { getWorkspace } = await import("@/lib/workspaces/store");
-    expect(getWorkspace(ws.id)).toBeUndefined();
+    // Project + session metadata dropped.
+    const { getProject } = await import("@/lib/projects/store");
+    expect(getProject(proj.id)).toBeUndefined();
     const { getMeta } = await import("@/lib/ai-sessions");
     expect(getMeta("wt-del")).toBeUndefined();
   });
 
-  it("404s for an unknown workspace id", async () => {
+  it("404s for an unknown project id", async () => {
     vi.resetModules();
-    const route = await import("@/app/api/workspaces/[id]/route");
+    const route = await import("@/app/api/projects/[id]/route");
     const res = await route.DELETE(mockReq(ADMIN), {
       params: Promise.resolve({ id: "no-such-id" }),
     });

@@ -6,9 +6,9 @@ import { execFileSync } from "child_process";
 /**
  * E2E for Issue #9 — Archive & Cleanup (CORRECTED model).
  *
- * Archive operates on a WORKTREE. Against the sandbox sample-repo (mounted as
+ * Archive operates on a WORKSPACE. Against the sandbox sample-repo (mounted as
  * TERMINUS_ROOT by the Playwright webServer):
- *  1. register the repo as a workspace and create a worktree-backed session via
+ *  1. register the repo as a project and create a worktree-backed session via
  *     the new-session dialog;
  *  2. archive it (POST /api/sessions/[name]/archive): the on-disk git worktree is
  *     REMOVED, the branch is PRESERVED, and the row drops from the active sidebar
@@ -105,7 +105,7 @@ test("archive removes the worktree (branch preserved) then restore recreates it 
   page,
   request,
 }) => {
-  await request.post("/api/workspaces", { data: { directory: SANDBOX_REPO } });
+  await request.post("/api/projects", { data: { directory: SANDBOX_REPO } });
 
   const sessionName = `e2e-arch-${uniqueSuffix()}`;
   const branch = `feature/e2e-arch-${uniqueSuffix()}`;
@@ -124,17 +124,17 @@ test("archive removes the worktree (branch preserved) then restore recreates it 
   expect(fs.existsSync(worktreePath)).toBe(false);
   expect(branchExists(SANDBOX_REPO, branch)).toBe(true);
 
-  // The worktree leaves the active list but is still derived as archived.
+  // The workspace leaves the active list but is still derived as archived.
   await expect
     .poll(async () => {
-      const res = await request.get("/api/workspaces");
-      const { workspaces } = await res.json();
-      const wt = workspaces
+      const res = await request.get("/api/projects");
+      const { projects } = await res.json();
+      const ws = projects
         .flatMap(
-          (w: { worktrees: Array<{ sessionName: string; archived?: boolean }> }) => w.worktrees
+          (p: { workspaces: Array<{ sessionName: string; archived?: boolean }> }) => p.workspaces
         )
         .find((w: { sessionName: string }) => w.sessionName === sessionName);
-      return wt?.archived ?? null;
+      return ws?.archived ?? null;
     })
     .toBe(true);
 
@@ -152,14 +152,14 @@ test("archive removes the worktree (branch preserved) then restore recreates it 
 
   await expect
     .poll(async () => {
-      const res = await request.get("/api/workspaces");
-      const { workspaces } = await res.json();
-      const wt = workspaces
+      const res = await request.get("/api/projects");
+      const { projects } = await res.json();
+      const ws = projects
         .flatMap(
-          (w: { worktrees: Array<{ sessionName: string; archived?: boolean }> }) => w.worktrees
+          (p: { workspaces: Array<{ sessionName: string; archived?: boolean }> }) => p.workspaces
         )
         .find((w: { sessionName: string }) => w.sessionName === sessionName);
-      return wt?.archived ?? false;
+      return ws?.archived ?? false;
     })
     .toBe(false);
 
@@ -167,25 +167,25 @@ test("archive removes the worktree (branch preserved) then restore recreates it 
   await request.delete(`/api/sessions/${encodeURIComponent(sessionName)}`).catch(() => undefined);
 });
 
-test("Archived section in the sidebar lists archived worktrees with a Restore action — UI", async ({
+test("Archived section in the sidebar lists archived workspaces with a Restore action — UI", async ({
   page,
   request,
 }) => {
-  await request.post("/api/workspaces", { data: { directory: SANDBOX_REPO } });
+  await request.post("/api/projects", { data: { directory: SANDBOX_REPO } });
 
   const sessionName = `e2e-archui-${uniqueSuffix()}`;
   const branch = `feature/e2e-archui-${uniqueSuffix()}`;
   const worktreePath = await createWorktreeSession(page, request, sessionName, branch);
 
-  // Drive the worktree "⋮ → Archive" from the sidebar.
+  // Drive the workspace "⋮ → Archive" from the sidebar.
   await page.goto(`/workspace/${encodeURIComponent(sessionName)}`);
-  const sidebar = page.getByTestId("workspace-sidebar");
+  const sidebar = page.getByTestId("project-sidebar");
   await expect(sidebar).toBeVisible();
 
-  const row = sidebar.locator(`[data-testid="worktree-row"][data-session="${sessionName}"]`);
+  const row = sidebar.locator(`[data-testid="workspace-row"][data-session="${sessionName}"]`);
   await expect(row).toBeVisible();
-  await row.getByTestId("worktree-menu-trigger").click();
-  await row.getByTestId("worktree-menu-archive").click();
+  await row.getByTestId("workspace-menu-trigger").click();
+  await row.getByTestId("workspace-menu-archive").click();
 
   // The active row drops out…
   await expect(row).toHaveCount(0, { timeout: 15_000 });
@@ -193,22 +193,22 @@ test("Archived section in the sidebar lists archived worktrees with a Restore ac
   await expect.poll(() => fs.existsSync(worktreePath)).toBe(false);
   expect(branchExists(SANDBOX_REPO, branch)).toBe(true);
 
-  // The Archived section appears with the archived worktree.
+  // The Archived section appears with the archived workspace.
   const archivedSection = sidebar.getByTestId("archived-section");
   await expect(archivedSection).toBeVisible();
   await archivedSection.getByTestId("archived-toggle").click();
   const archivedRow = archivedSection.locator(
-    `[data-testid="archived-worktree-row"][data-session="${sessionName}"]`
+    `[data-testid="archived-workspace-row"][data-session="${sessionName}"]`
   );
   await expect(archivedRow).toBeVisible();
 
   // Restore from the Archived section recreates the worktree.
-  await archivedRow.getByTestId("archived-worktree-restore").click();
+  await archivedRow.getByTestId("archived-workspace-restore").click();
   await expect.poll(() => fs.existsSync(worktreePath), { timeout: 15_000 }).toBe(true);
 
   // The row returns to the active list.
   await expect(
-    sidebar.locator(`[data-testid="worktree-row"][data-session="${sessionName}"]`)
+    sidebar.locator(`[data-testid="workspace-row"][data-session="${sessionName}"]`)
   ).toBeVisible({ timeout: 15_000 });
 
   await request.delete(`/api/sessions/${encodeURIComponent(sessionName)}`).catch(() => undefined);

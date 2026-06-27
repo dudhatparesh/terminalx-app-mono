@@ -1,21 +1,21 @@
 "use client";
 
-// Multi-workspace sidebar (issue #12, corrected Workspace → Worktree model).
+// Project sidebar (issue #12, corrected Project → Workspace model).
 //
-// A Workspace is a PROJECT/REPO container rendered as a HEADER (name + "+"
-// add-worktree + a context menu with "Delete workspace"). Its worktrees are
-// nested rows: status icon + branch name + diff stat + a "⋮" menu (Collapse,
-// Archive). Collapse/expand toggles the whole group.
+// A Project is a REPO container rendered as a HEADER (name + "+" add-workspace +
+// a context menu with "Delete project"). Its workspaces are nested rows: status
+// icon + branch name + diff stat + a "⋮" menu (Collapse, Archive). Collapse/
+// expand toggles the whole group.
 //
-// Deleting a workspace is IRREVERSIBLE (it drops the project and removes ALL of
-// its worktrees), so the menu item never deletes directly — it opens an in-app
-// confirmation dialog (ConfirmDeleteDialog) that names the workspace and warns
-// about the worktrees. deleteWorkspace fires ONLY on explicit confirm.
+// Deleting a project is IRREVERSIBLE (it drops the project and removes ALL of
+// its workspaces), so the menu item never deletes directly — it opens an in-app
+// confirmation dialog (ConfirmDeleteDialog) that names the project and warns
+// about the workspaces. deleteProject fires ONLY on explicit confirm.
 //
 // CLIENT/SERVER BOUNDARY: this file imports ONLY browser-safe modules
-// (@/types/workspace formatters + the useWorkspaces hook, which fetches the
-// API). It never imports the workspace store / resolve / git / github server
-// modules — those use Node builtins and would break the client bundle.
+// (@/types/project formatters + the useProjects hook, which fetches the API).
+// It never imports the project store / resolve / git / github server modules —
+// those use Node builtins and would break the client bundle.
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -33,11 +33,11 @@ import {
   RotateCcw,
   Trash2,
 } from "lucide-react";
-import { useWorkspaces } from "@/hooks/useWorkspaces";
-import { formatDiffStat, statusIcon } from "@/types/workspace";
-import type { WorktreeStatus, WorktreeView, WorkspaceView } from "@/types/workspace";
+import { useProjects } from "@/hooks/useProjects";
+import { formatDiffStat, statusIcon } from "@/types/project";
+import type { WorkspaceStatus, WorkspaceView, ProjectView } from "@/types/project";
 
-function StatusIcon({ status }: { status: WorktreeStatus }) {
+function StatusIcon({ status }: { status: WorkspaceStatus }) {
   const kind = statusIcon(status);
   if (kind === "spinner") {
     return (
@@ -129,20 +129,20 @@ function MenuItem({
 }
 
 /**
- * Confirmation dialog for the irreversible "Delete workspace" action (issue #9).
- * Renders a dark-theme modal that names the workspace, warns it removes every
- * worktree, and exposes Cancel / Delete. The destructive callback fires ONLY
+ * Confirmation dialog for the irreversible "Delete project" action (issue #9).
+ * Renders a dark-theme modal that names the project, warns it removes every
+ * workspace, and exposes Cancel / Delete. The destructive callback fires ONLY
  * when the user clicks Delete; closing or Cancel never deletes. Esc + backdrop
  * click both cancel.
  */
 function ConfirmDeleteDialog({
-  workspace,
-  worktreeCount,
+  project,
+  workspaceCount,
   onCancel,
   onConfirm,
 }: {
-  workspace: WorkspaceView;
-  worktreeCount: number;
+  project: ProjectView;
+  workspaceCount: number;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -156,10 +156,10 @@ function ConfirmDeleteDialog({
 
   return (
     <div
-      data-testid="workspace-delete-confirm"
+      data-testid="project-delete-confirm"
       role="alertdialog"
       aria-modal="true"
-      aria-label={`Delete workspace ${workspace.name}`}
+      aria-label={`Delete project ${project.name}`}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       onMouseDown={(e) => {
         // Backdrop click cancels; clicks inside the panel do not bubble here.
@@ -172,33 +172,33 @@ function ConfirmDeleteDialog({
             <AlertTriangle size={15} />
           </span>
           <div className="min-w-0">
-            <h2 className="text-[13px] font-medium text-[#e6f0e4]">Delete workspace</h2>
+            <h2 className="text-[13px] font-medium text-[#e6f0e4]">Delete project</h2>
             <p className="mt-1 text-[12px] leading-relaxed text-[#a8b3a6]">
               Delete{" "}
               <span
                 className="font-medium text-[#e6f0e4]"
-                data-testid="workspace-delete-confirm-name"
+                data-testid="project-delete-confirm-name"
               >
-                {workspace.name}
+                {project.name}
               </span>
-              ? This removes the workspace and{" "}
-              {worktreeCount === 0
-                ? "all of its worktrees"
-                : `all ${worktreeCount} of its worktree${worktreeCount === 1 ? "" : "s"}`}
+              ? This removes the project and{" "}
+              {workspaceCount === 0
+                ? "all of its workspaces"
+                : `all ${workspaceCount} of its workspace${workspaceCount === 1 ? "" : "s"}`}
               . This action cannot be undone.
             </p>
           </div>
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <button
-            data-testid="workspace-delete-confirm-cancel"
+            data-testid="project-delete-confirm-cancel"
             onClick={onCancel}
             className="rounded border border-[#252933] px-3 py-1.5 text-[12px] text-[#a8b3a6] transition-colors hover:bg-[#1a1d24] hover:text-[#e6f0e4]"
           >
             Cancel
           </button>
           <button
-            data-testid="workspace-delete-confirm-accept"
+            data-testid="project-delete-confirm-accept"
             onClick={onConfirm}
             className="rounded bg-[#ff6b6b] px-3 py-1.5 text-[12px] font-medium text-[#1a0c0d] transition-colors hover:bg-[#ff8585]"
           >
@@ -210,82 +210,82 @@ function ConfirmDeleteDialog({
   );
 }
 
-function WorktreeRow({
-  worktree,
+function WorkspaceRow({
+  workspace,
   activeSession,
   onOpen,
   onCollapse,
   onArchive,
 }: {
-  worktree: WorktreeView;
+  workspace: WorkspaceView;
   activeSession: string | null;
   onOpen: (sessionName: string) => void;
   onCollapse: (sessionName: string, collapsed: boolean) => void;
   onArchive: (sessionName: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const active = worktree.sessionName === activeSession;
-  const stat = formatDiffStat(worktree.diffStat);
+  const active = workspace.sessionName === activeSession;
+  const stat = formatDiffStat(workspace.diffStat);
 
   return (
     <div
-      data-testid="worktree-row"
-      data-session={worktree.sessionName}
-      data-status={worktree.status}
+      data-testid="workspace-row"
+      data-session={workspace.sessionName}
+      data-status={workspace.status}
       className={`group relative flex h-8 w-full items-center gap-2 rounded px-2 text-[12px] transition-colors ${
         active ? "bg-[#14161e] text-[#e6f0e4]" : "text-[#a8b3a6] hover:bg-[#14161e]"
       }`}
     >
       <button
-        onClick={() => onOpen(worktree.sessionName)}
+        onClick={() => onOpen(workspace.sessionName)}
         className="flex min-w-0 flex-1 items-center gap-2 text-left"
-        data-testid="worktree-open"
+        data-testid="workspace-open"
       >
-        <StatusIcon status={worktree.status} />
-        <span className="min-w-0 flex-1 truncate" data-testid="worktree-name">
-          {worktree.branch}
+        <StatusIcon status={workspace.status} />
+        <span className="min-w-0 flex-1 truncate" data-testid="workspace-name">
+          {workspace.branch}
         </span>
       </button>
 
       {stat && (
         <span
-          data-testid="worktree-diffstat"
+          data-testid="workspace-diffstat"
           className="shrink-0 font-mono text-[10px] tabular-nums text-[#6b7569]"
         >
-          {worktree.diffStat.additions > 0 && (
-            <span className="text-[#00cc6e]">+{worktree.diffStat.additions}</span>
+          {workspace.diffStat.additions > 0 && (
+            <span className="text-[#00cc6e]">+{workspace.diffStat.additions}</span>
           )}
-          {worktree.diffStat.additions > 0 && worktree.diffStat.deletions > 0 && " "}
-          {worktree.diffStat.deletions > 0 && (
-            <span className="text-[#ff6b6b]">−{worktree.diffStat.deletions}</span>
+          {workspace.diffStat.additions > 0 && workspace.diffStat.deletions > 0 && " "}
+          {workspace.diffStat.deletions > 0 && (
+            <span className="text-[#ff6b6b]">−{workspace.diffStat.deletions}</span>
           )}
         </span>
       )}
 
       <div className="relative shrink-0">
         <button
-          data-testid="worktree-menu-trigger"
-          aria-label="worktree menu"
+          data-testid="workspace-menu-trigger"
+          aria-label="workspace menu"
           onClick={() => setMenuOpen((o) => !o)}
           className="flex h-5 w-5 items-center justify-center rounded text-[#6b7569] opacity-0 transition-colors hover:bg-[#1a1d24] hover:text-[#e6f0e4] group-hover:opacity-100 data-[open=true]:opacity-100"
           data-open={menuOpen}
         >
           <MoreVertical size={13} />
         </button>
-        <Menu open={menuOpen} onClose={() => setMenuOpen(false)} testid="worktree-menu">
+        <Menu open={menuOpen} onClose={() => setMenuOpen(false)} testid="workspace-menu">
           <MenuItem
-            testid="worktree-menu-collapse"
+            testid="workspace-menu-collapse"
             onClick={() => {
-              onCollapse(worktree.sessionName, !worktree.collapsed);
+              onCollapse(workspace.sessionName, !workspace.collapsed);
               setMenuOpen(false);
             }}
           >
             <ChevronRight size={13} /> Collapse
           </MenuItem>
           <MenuItem
-            testid="worktree-menu-archive"
+            testid="workspace-menu-archive"
             onClick={() => {
-              onArchive(worktree.sessionName);
+              onArchive(workspace.sessionName);
               setMenuOpen(false);
             }}
           >
@@ -297,95 +297,95 @@ function WorktreeRow({
   );
 }
 
-function WorkspaceGroup({
-  workspace,
+function ProjectGroup({
+  project,
   activeSession,
-  onOpenWorktree,
-  onAddWorktree,
+  onOpenWorkspace,
+  onAddWorkspace,
   onRequestDelete,
-  onCollapseWorktree,
-  onArchiveWorktree,
+  onCollapseWorkspace,
+  onArchiveWorkspace,
 }: {
-  workspace: WorkspaceView;
+  project: ProjectView;
   activeSession: string | null;
-  onOpenWorktree: (sessionName: string) => void;
-  onAddWorktree: (repoRoot: string) => void;
-  onRequestDelete: (workspace: WorkspaceView) => void;
-  onCollapseWorktree: (sessionName: string, collapsed: boolean) => void;
-  onArchiveWorktree: (sessionName: string) => void;
+  onOpenWorkspace: (sessionName: string) => void;
+  onAddWorkspace: (repoRoot: string) => void;
+  onRequestDelete: (project: ProjectView) => void;
+  onCollapseWorkspace: (sessionName: string, collapsed: boolean) => void;
+  onArchiveWorkspace: (sessionName: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
-  // Collapsed worktrees are hidden from the group (issue #9 keeps them in archive).
-  const visible = workspace.worktrees.filter((w) => !w.collapsed && !w.archived);
+  // Collapsed workspaces are hidden from the group (issue #9 keeps them in archive).
+  const visible = project.workspaces.filter((w) => !w.collapsed && !w.archived);
 
   return (
-    <div data-testid="workspace-group" data-workspace-id={workspace.id} className="mb-2">
+    <div data-testid="project-group" data-project-id={project.id} className="mb-2">
       <div className="relative flex items-center gap-1.5 rounded px-1 py-1.5 text-[13px] text-[#e6f0e4]">
         <button
-          data-testid="workspace-toggle"
-          aria-label={expanded ? "collapse workspace" : "expand workspace"}
+          data-testid="project-toggle"
+          aria-label={expanded ? "collapse project" : "expand project"}
           onClick={() => setExpanded((e) => !e)}
           className="flex h-4 w-4 items-center justify-center rounded text-[#6b7569] hover:text-[#e6f0e4]"
         >
           {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
         <span className="flex h-5 w-5 items-center justify-center rounded bg-[#002a17] text-[10px] text-[#00ff88]">
-          {workspace.name.slice(0, 2).toLowerCase()}
+          {project.name.slice(0, 2).toLowerCase()}
         </span>
         <span
-          data-testid="workspace-name"
+          data-testid="project-name"
           className="min-w-0 flex-1 truncate font-medium"
-          title={workspace.repoRoot}
+          title={project.repoRoot}
         >
-          {workspace.name}
+          {project.name}
         </span>
         <button
-          data-testid="workspace-add-worktree"
-          aria-label="new worktree"
-          onClick={() => onAddWorktree(workspace.repoRoot)}
+          data-testid="project-add-workspace"
+          aria-label="new workspace"
+          onClick={() => onAddWorkspace(project.repoRoot)}
           className="flex h-5 w-5 items-center justify-center rounded text-[#6b7569] transition-colors hover:bg-[#14161e] hover:text-[#e6f0e4]"
         >
           <Plus size={13} />
         </button>
         <div className="relative shrink-0">
           <button
-            data-testid="workspace-menu-trigger"
-            aria-label="workspace menu"
+            data-testid="project-menu-trigger"
+            aria-label="project menu"
             onClick={() => setMenuOpen((o) => !o)}
             className="flex h-5 w-5 items-center justify-center rounded text-[#6b7569] transition-colors hover:bg-[#14161e] hover:text-[#e6f0e4]"
           >
             <MoreVertical size={13} />
           </button>
-          <Menu open={menuOpen} onClose={() => setMenuOpen(false)} testid="workspace-menu">
+          <Menu open={menuOpen} onClose={() => setMenuOpen(false)} testid="project-menu">
             <MenuItem
-              testid="workspace-menu-delete"
+              testid="project-menu-delete"
               danger
               onClick={() => {
                 // Never deletes directly — opens the confirmation dialog (#9).
-                onRequestDelete(workspace);
+                onRequestDelete(project);
                 setMenuOpen(false);
               }}
             >
-              <Trash2 size={13} /> Delete workspace
+              <Trash2 size={13} /> Delete project
             </MenuItem>
           </Menu>
         </div>
       </div>
 
       {expanded && (
-        <div className="mt-0.5 space-y-0.5 pl-3" data-testid="workspace-worktrees">
+        <div className="mt-0.5 space-y-0.5 pl-3" data-testid="project-workspaces">
           {visible.length === 0 ? (
-            <div className="px-2 py-1.5 text-[11px] text-[#6b7569]">no worktrees</div>
+            <div className="px-2 py-1.5 text-[11px] text-[#6b7569]">no workspaces</div>
           ) : (
-            visible.map((wt) => (
-              <WorktreeRow
-                key={wt.sessionName}
-                worktree={wt}
+            visible.map((ws) => (
+              <WorkspaceRow
+                key={ws.sessionName}
+                workspace={ws}
                 activeSession={activeSession}
-                onOpen={onOpenWorktree}
-                onCollapse={onCollapseWorktree}
-                onArchive={onArchiveWorktree}
+                onOpen={onOpenWorkspace}
+                onCollapse={onCollapseWorkspace}
+                onArchive={onArchiveWorkspace}
               />
             ))
           )}
@@ -395,28 +395,28 @@ function WorkspaceGroup({
   );
 }
 
-/** One archived worktree row with a Restore action (issue #9 Archived view). */
+/** One archived workspace row with a Restore action (issue #9 Archived view). */
 function ArchivedRow({
-  worktree,
+  workspace,
   onRestore,
 }: {
-  worktree: WorktreeView;
+  workspace: WorkspaceView;
   onRestore: (sessionName: string) => void;
 }) {
   return (
     <div
-      data-testid="archived-worktree-row"
-      data-session={worktree.sessionName}
+      data-testid="archived-workspace-row"
+      data-session={workspace.sessionName}
       className="group flex h-8 w-full items-center gap-2 rounded px-2 text-[12px] text-[#6b7569] hover:bg-[#14161e]"
     >
       <Archive size={13} className="shrink-0 text-[#6b7569]" />
-      <span className="min-w-0 flex-1 truncate" data-testid="archived-worktree-name">
-        {worktree.branch}
+      <span className="min-w-0 flex-1 truncate" data-testid="archived-workspace-name">
+        {workspace.branch}
       </span>
       <button
-        data-testid="archived-worktree-restore"
-        aria-label="restore worktree"
-        onClick={() => onRestore(worktree.sessionName)}
+        data-testid="archived-workspace-restore"
+        aria-label="restore workspace"
+        onClick={() => onRestore(workspace.sessionName)}
         className="flex shrink-0 items-center gap-1 rounded border border-[#1a1d24] px-1.5 py-0.5 text-[10px] text-[#a8b3a6] opacity-0 transition-colors hover:bg-[#1a1d24] hover:text-[#e6f0e4] group-hover:opacity-100"
       >
         <RotateCcw size={11} /> Restore
@@ -426,19 +426,19 @@ function ArchivedRow({
 }
 
 /**
- * The "Archived" section: a collapsible list of every archived worktree across
- * all workspaces, each with a Restore action (issue #9). Hidden entirely when
+ * The "Archived" section: a collapsible list of every archived workspace across
+ * all projects, each with a Restore action (issue #9). Hidden entirely when
  * nothing is archived so it never clutters the rail.
  */
 function ArchivedSection({
-  workspaces,
+  projects,
   onRestore,
 }: {
-  workspaces: WorkspaceView[];
+  projects: ProjectView[];
   onRestore: (sessionName: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const archived = workspaces.flatMap((ws) => ws.worktrees.filter((w) => w.archived));
+  const archived = projects.flatMap((proj) => proj.workspaces.filter((w) => w.archived));
   if (archived.length === 0) return null;
 
   return (
@@ -461,8 +461,8 @@ function ArchivedSection({
       </button>
       {expanded && (
         <div className="mt-0.5 space-y-0.5 pl-3" data-testid="archived-list">
-          {archived.map((wt) => (
-            <ArchivedRow key={wt.sessionName} worktree={wt} onRestore={onRestore} />
+          {archived.map((ws) => (
+            <ArchivedRow key={ws.sessionName} workspace={ws} onRestore={onRestore} />
           ))}
         </div>
       )}
@@ -470,82 +470,79 @@ function ArchivedSection({
   );
 }
 
-export function WorkspaceSidebar({ activeSession }: { activeSession: string | null }) {
+export function ProjectSidebar({ activeSession }: { activeSession: string | null }) {
   const router = useRouter();
   const {
-    workspaces,
+    projects,
     isLoading,
-    deleteWorkspace,
-    setWorktreeCollapsed,
-    archiveWorktree,
-    restoreWorktree,
-  } = useWorkspaces();
+    deleteProject,
+    setWorkspaceCollapsed,
+    archiveWorkspace,
+    restoreWorkspace,
+  } = useProjects();
 
   // The review-panel Archive button (ReviewStatusBar) dispatches this event for
-  // the CURRENT worktree; the sidebar owns the archive flow (#9), so it listens
+  // the CURRENT workspace; the sidebar owns the archive flow (#9), so it listens
   // and archives that session through the same API path the "⋮ → Archive" uses.
   useEffect(() => {
     const onArchiveRequest = (e: Event) => {
       const detail = (e as CustomEvent<{ sessionId?: string }>).detail;
-      if (detail?.sessionId) void archiveWorktree(detail.sessionId);
+      if (detail?.sessionId) void archiveWorkspace(detail.sessionId);
     };
     window.addEventListener("terminalx:archive-request", onArchiveRequest);
     return () => window.removeEventListener("terminalx:archive-request", onArchiveRequest);
-  }, [archiveWorktree]);
+  }, [archiveWorkspace]);
 
-  // The workspace pending an irreversible delete — set when the user picks
-  // "Delete workspace" from the menu, cleared on Cancel/confirm. The actual
-  // deleteWorkspace call happens ONLY when the dialog's Delete is confirmed (#9).
-  const [pendingDelete, setPendingDelete] = useState<WorkspaceView | null>(null);
+  // The project pending an irreversible delete — set when the user picks
+  // "Delete project" from the menu, cleared on Cancel/confirm. The actual
+  // deleteProject call happens ONLY when the dialog's Delete is confirmed (#9).
+  const [pendingDelete, setPendingDelete] = useState<ProjectView | null>(null);
 
-  const openWorktree = (sessionName: string) => {
+  const openWorkspace = (sessionName: string) => {
     router.push(`/workspace/${encodeURIComponent(sessionName)}`);
   };
 
   // The "+" opens the existing new-session dialog pre-scoped to this repo so a
-  // new worktree lands inside the workspace's project (#12).
-  const addWorktree = (repoRoot: string) => {
-    router.push(`/dashboard?newWorktree=${encodeURIComponent(repoRoot)}`);
+  // new workspace lands inside the project (#12).
+  const addWorkspace = (repoRoot: string) => {
+    router.push(`/dashboard?newWorkspace=${encodeURIComponent(repoRoot)}`);
   };
 
   const confirmDelete = () => {
-    if (pendingDelete) void deleteWorkspace(pendingDelete.id);
+    if (pendingDelete) void deleteProject(pendingDelete.id);
     setPendingDelete(null);
   };
 
   return (
-    <div className="mt-1 space-y-1" data-testid="workspace-sidebar">
-      {isLoading && workspaces.length === 0 ? (
-        <div className="px-2 py-3 text-[11px] text-[#6b7569]">loading workspaces…</div>
-      ) : workspaces.length === 0 ? (
-        <div className="px-2 py-3 text-[11px] text-[#6b7569]" data-testid="workspace-empty">
-          no workspaces yet
+    <div className="mt-1 space-y-1" data-testid="project-sidebar">
+      {isLoading && projects.length === 0 ? (
+        <div className="px-2 py-3 text-[11px] text-[#6b7569]">loading projects…</div>
+      ) : projects.length === 0 ? (
+        <div className="px-2 py-3 text-[11px] text-[#6b7569]" data-testid="project-empty">
+          no projects yet
         </div>
       ) : (
         <>
-          {workspaces.map((ws) => (
-            <WorkspaceGroup
-              key={ws.id}
-              workspace={ws}
+          {projects.map((proj) => (
+            <ProjectGroup
+              key={proj.id}
+              project={proj}
               activeSession={activeSession}
-              onOpenWorktree={openWorktree}
-              onAddWorktree={addWorktree}
+              onOpenWorkspace={openWorkspace}
+              onAddWorkspace={addWorkspace}
               onRequestDelete={setPendingDelete}
-              onCollapseWorktree={(name, collapsed) => void setWorktreeCollapsed(name, collapsed)}
-              onArchiveWorktree={(name) => void archiveWorktree(name)}
+              onCollapseWorkspace={(name, collapsed) => void setWorkspaceCollapsed(name, collapsed)}
+              onArchiveWorkspace={(name) => void archiveWorkspace(name)}
             />
           ))}
-          <ArchivedSection
-            workspaces={workspaces}
-            onRestore={(name) => void restoreWorktree(name)}
-          />
+          <ArchivedSection projects={projects} onRestore={(name) => void restoreWorkspace(name)} />
         </>
       )}
 
       {pendingDelete && (
         <ConfirmDeleteDialog
-          workspace={pendingDelete}
-          worktreeCount={pendingDelete.worktrees.length}
+          project={pendingDelete}
+          workspaceCount={pendingDelete.workspaces.length}
           onCancel={() => setPendingDelete(null)}
           onConfirm={confirmDelete}
         />

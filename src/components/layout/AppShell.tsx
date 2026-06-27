@@ -7,10 +7,10 @@ import { useRouter } from "next/navigation";
 import { ChevronRight, History, Plus, Settings } from "lucide-react";
 import { TopNav } from "./TopNav";
 import { StatusBar } from "./StatusBar";
-// Multi-workspace sidebar (#12): the left rail groups worktrees under their
-// workspace (project/repo) header. WorkspaceSidebar is boundary-clean (it only
-// imports browser-safe types + the fetch hook, never the server store/git).
-import { WorkspaceSidebar } from "./WorkspaceSidebar";
+// Project sidebar (#12): the left rail groups workspaces under their project
+// (repo) header. ProjectSidebar is boundary-clean (it only imports browser-safe
+// types + the fetch hook, never the server store/git).
+import { ProjectSidebar } from "./ProjectSidebar";
 // feature #2 (diff viewer): the right aside now hosts the Review panel, whose
 // "Changes" tab is the diff viewer. ReviewPanel supersedes RightPanel (spec §9.1).
 import { ReviewPanel } from "@/components/review/ReviewPanel";
@@ -61,20 +61,20 @@ function LeftSidebar({
         </Link>
 
         <div className="mt-5 flex items-center px-1 text-[10px] uppercase tracking-wider text-[#6b7569]">
-          <span>Workspaces</span>
+          <span>Projects</span>
           <span className="flex-1" />
           <button
             onClick={() => router.push("/dashboard")}
             className="rounded p-1 text-[#6b7569] transition-colors hover:bg-[#14161e] hover:text-[#e6f0e4]"
-            aria-label="new workspace"
-            data-testid="sidebar-new-workspace"
+            aria-label="new project"
+            data-testid="sidebar-new-project"
           >
             <Plus size={12} />
           </button>
         </div>
 
-        {/* #12: workspace (project) headers, each grouping its worktrees. */}
-        <WorkspaceSidebar activeSession={activeSession} />
+        {/* #12: project (repo) headers, each grouping its workspaces. */}
+        <ProjectSidebar activeSession={activeSession} />
       </div>
 
       <div className="flex h-12 items-center gap-2 border-t border-[#1a1d24] px-3 text-[#6b7569]">

@@ -63,7 +63,7 @@ describe("patchMeta + PATCH /api/sessions/[name] (feature #12)", () => {
     expect(await sessions.patchMeta("nope", { archived: true })).toBeUndefined();
   });
 
-  it("PATCH collapses a worktree row", async () => {
+  it("PATCH collapses a workspace row", async () => {
     const { PATCH, sessions } = await freshModules();
     const res = await PATCH(mockReq(ADMIN, { collapsed: true }), {
       params: Promise.resolve({ name: "feat-x" }),
@@ -74,7 +74,7 @@ describe("patchMeta + PATCH /api/sessions/[name] (feature #12)", () => {
     expect(sessions.getMeta("feat-x")?.collapsed).toBe(true);
   });
 
-  it("PATCH archives a worktree row and stamps archivedAt", async () => {
+  it("PATCH archives a workspace row and stamps archivedAt", async () => {
     const { PATCH, sessions } = await freshModules();
     const res = await PATCH(mockReq(ADMIN, { archived: true }), {
       params: Promise.resolve({ name: "feat-x" }),

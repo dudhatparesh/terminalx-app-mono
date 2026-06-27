@@ -35,9 +35,9 @@ export type AuditEvent =
   | "workspace_config_edited"
   | "workspace_script_run"
   | "workspace_setup_run"
-  // Multi-workspace sidebar (feature #12): project registration + deletion.
-  | "workspace_registered"
-  | "workspace_deleted"
+  // Project sidebar (feature #12): project registration + deletion.
+  | "project_registered"
+  | "project_deleted"
   // Models & harness settings (feature #11): repo-scope settings write.
   | "settings_repo_updated"
   // OpenCode provider catalog (feature #8): records only the provider id + scope,

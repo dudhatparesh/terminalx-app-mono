@@ -8,10 +8,10 @@ import { execFileSync } from "child_process";
 // ai-sessions.ts). Load a FRESH instance after chdir so DATA_DIR points at the
 // per-test tmp cwd. getGitDirectoryInfo shells out to real git, so we seed real
 // repos inside TERMINUS_ROOT.
-type StoreModule = typeof import("@/lib/workspaces/store");
+type StoreModule = typeof import("@/lib/projects/store");
 async function freshStore(): Promise<StoreModule> {
   vi.resetModules();
-  return import("@/lib/workspaces/store");
+  return import("@/lib/projects/store");
 }
 
 function git(repo: string, args: string[]): void {
@@ -30,7 +30,7 @@ function initRepo(root: string, dir: string): string {
   return repo;
 }
 
-describe("workspaces store (issue #12, corrected model)", () => {
+describe("projects store (issue #12, corrected model)", () => {
   let root: string;
   let cwd: string;
   let prevCwd: string;
@@ -38,7 +38,7 @@ describe("workspaces store (issue #12, corrected model)", () => {
   beforeEach(() => {
     prevCwd = process.cwd();
     // TERMINUS_ROOT must contain both the repos and the cwd (resolveSafePath).
-    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tx-ws-")));
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tx-proj-")));
     process.env.TERMINUS_ROOT = root;
     cwd = path.join(root, "cwd");
     fs.mkdirSync(cwd, { recursive: true });
@@ -52,83 +52,83 @@ describe("workspaces store (issue #12, corrected model)", () => {
   });
 
   it("lists empty when no file exists", async () => {
-    const { listWorkspaces } = await freshStore();
-    expect(listWorkspaces()).toEqual([]);
+    const { listProjects } = await freshStore();
+    expect(listProjects()).toEqual([]);
   });
 
-  it("registers a git repo as a workspace keyed by repoRoot", async () => {
+  it("registers a git repo as a project keyed by repoRoot", async () => {
     const repo = initRepo(root, "myrepo");
-    const { registerWorkspace, listWorkspaces } = await freshStore();
-    const ws = await registerWorkspace({ directory: repo });
-    expect(ws.repoRoot).toBe(fs.realpathSync(repo));
-    expect(ws.name).toBe("myrepo");
-    expect(ws.id).toBeTruthy();
-    expect(listWorkspaces()).toHaveLength(1);
+    const { registerProject, listProjects } = await freshStore();
+    const proj = await registerProject({ directory: repo });
+    expect(proj.repoRoot).toBe(fs.realpathSync(repo));
+    expect(proj.name).toBe("myrepo");
+    expect(proj.id).toBeTruthy();
+    expect(listProjects()).toHaveLength(1);
   });
 
   it("resolves a sub-directory to the repo root", async () => {
     const repo = initRepo(root, "myrepo2");
     const sub = path.join(repo, "src");
     fs.mkdirSync(sub, { recursive: true });
-    const { registerWorkspace } = await freshStore();
-    const ws = await registerWorkspace({ directory: sub });
-    expect(ws.repoRoot).toBe(fs.realpathSync(repo));
+    const { registerProject } = await freshStore();
+    const proj = await registerProject({ directory: sub });
+    expect(proj.repoRoot).toBe(fs.realpathSync(repo));
   });
 
   it("is idempotent — re-registering the same repo returns the existing record", async () => {
     const repo = initRepo(root, "myrepo3");
-    const { registerWorkspace, listWorkspaces } = await freshStore();
-    const a = await registerWorkspace({ directory: repo });
-    const b = await registerWorkspace({ directory: path.join(repo, "..", "myrepo3") });
+    const { registerProject, listProjects } = await freshStore();
+    const a = await registerProject({ directory: repo });
+    const b = await registerProject({ directory: path.join(repo, "..", "myrepo3") });
     expect(b.id).toBe(a.id);
-    expect(listWorkspaces()).toHaveLength(1);
+    expect(listProjects()).toHaveLength(1);
   });
 
-  it("rejects a non-git directory with a 400 WorkspaceError", async () => {
+  it("rejects a non-git directory with a 400 ProjectError", async () => {
     const plain = path.join(root, "plain");
     fs.mkdirSync(plain, { recursive: true });
-    const { registerWorkspace, WorkspaceError } = await freshStore();
-    await expect(registerWorkspace({ directory: plain })).rejects.toBeInstanceOf(WorkspaceError);
-    await expect(registerWorkspace({ directory: plain })).rejects.toMatchObject({ status: 400 });
+    const { registerProject, ProjectError } = await freshStore();
+    await expect(registerProject({ directory: plain })).rejects.toBeInstanceOf(ProjectError);
+    await expect(registerProject({ directory: plain })).rejects.toMatchObject({ status: 400 });
   });
 
   it("rejects a path that escapes TERMINUS_ROOT with a 403", async () => {
-    const { registerWorkspace } = await freshStore();
+    const { registerProject } = await freshStore();
     await expect(
-      registerWorkspace({ directory: path.join(root, "..", "..", "etc") })
+      registerProject({ directory: path.join(root, "..", "..", "etc") })
     ).rejects.toMatchObject({ status: 403 });
   });
 
   it("writes the data file with 0600 perms", async () => {
     const repo = initRepo(root, "permrepo");
-    const { registerWorkspace } = await freshStore();
-    await registerWorkspace({ directory: repo });
-    const file = path.join(cwd, "data", "workspaces.json");
+    const { registerProject } = await freshStore();
+    await registerProject({ directory: repo });
+    const file = path.join(cwd, "data", "projects.json");
     expect(fs.existsSync(file)).toBe(true);
     if (process.platform !== "win32") {
       expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     }
   });
 
-  it("deletes a workspace by id and returns the removed record", async () => {
+  it("deletes a project by id and returns the removed record", async () => {
     const repo = initRepo(root, "delrepo");
-    const { registerWorkspace, deleteWorkspace, listWorkspaces, getWorkspace } = await freshStore();
-    const ws = await registerWorkspace({ directory: repo });
-    const removed = await deleteWorkspace(ws.id);
-    expect(removed?.id).toBe(ws.id);
-    expect(getWorkspace(ws.id)).toBeUndefined();
-    expect(listWorkspaces()).toEqual([]);
+    const { registerProject, deleteProject, listProjects, getProject } = await freshStore();
+    const proj = await registerProject({ directory: repo });
+    const removed = await deleteProject(proj.id);
+    expect(removed?.id).toBe(proj.id);
+    expect(getProject(proj.id)).toBeUndefined();
+    expect(listProjects()).toEqual([]);
   });
 
   it("deleting an unknown id returns undefined (no throw)", async () => {
-    const { deleteWorkspace } = await freshStore();
-    await expect(deleteWorkspace("nope")).resolves.toBeUndefined();
+    const { deleteProject } = await freshStore();
+    await expect(deleteProject("nope")).resolves.toBeUndefined();
   });
 
   it("honors a custom display name", async () => {
     const repo = initRepo(root, "namedrepo");
-    const { registerWorkspace } = await freshStore();
-    const ws = await registerWorkspace({ directory: repo, name: "  My Project  " });
-    expect(ws.name).toBe("My Project");
+    const { registerProject } = await freshStore();
+    const proj = await registerProject({ directory: repo, name: "  My Project  " });
+    expect(proj.name).toBe("My Project");
   });
 });

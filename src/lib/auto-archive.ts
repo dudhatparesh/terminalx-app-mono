@@ -8,7 +8,7 @@
 // archive-policy.ts; this module performs the I/O.
 //
 // The PR-status lookup is injectable so the trigger is unit-testable without
-// GitHub; the default resolves via the #7 GitHub layer (resolveWorktreePR).
+// GitHub; the default resolves via the #7 GitHub layer (resolveWorkspacePR).
 
 import { listMetadata, patchMeta, type SessionMeta } from "./ai-sessions";
 import { removeGitWorktree } from "./git-worktree";
@@ -27,9 +27,9 @@ export interface AutoArchiveOptions {
 
 async function defaultResolvePrStatus(meta: SessionMeta): Promise<PullRequestStatus | undefined> {
   // Lazy import keeps the (heavier) resolve module off the hot path and avoids a
-  // cycle; resolveWorktreePR is itself best-effort and never throws.
-  const { resolveWorktreePR } = await import("./workspaces/resolve");
-  const { prStatus } = await resolveWorktreePR(meta);
+  // cycle; resolveWorkspacePR is itself best-effort and never throws.
+  const { resolveWorkspacePR } = await import("./projects/resolve");
+  const { prStatus } = await resolveWorkspacePR(meta);
   return prStatus;
 }
 
