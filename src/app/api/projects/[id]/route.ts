@@ -1,11 +1,11 @@
-// DELETE /api/workspaces/[id] (issue #12, corrected model).
+// DELETE /api/projects/[id] (issue #12, corrected model).
 //
-// Deleting a WORKSPACE removes the whole PROJECT: the registration AND every
-// worktree inside it. This is DISTINCT from archiving a single worktree (issue
-// #9). For each derived worktree (a session whose worktree.repoRoot matches the
-// workspace) we kill its tmux session, remove the git worktree via the shared
+// Deleting a PROJECT removes the whole container: the registration AND every
+// workspace inside it. This is DISTINCT from archiving a single workspace (issue
+// #9). For each derived workspace (a session whose worktree.repoRoot matches the
+// project) we kill its tmux session, remove the git worktree via the shared
 // removeGitWorktree (which never follows shared symlinks into their targets),
-// and drop its session metadata — then drop the workspace record itself.
+// and drop its session metadata — then drop the project record itself.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getUserScoping } from "@/lib/session-scope";
@@ -14,14 +14,14 @@ import { deleteMeta, listMetadata } from "@/lib/ai-sessions";
 import { killSession } from "@/lib/tmux";
 import { removeGitWorktree } from "@/lib/git-worktree";
 import { deleteRecordingsForSession } from "@/lib/recordings-cleanup";
-import { deleteWorkspace, getWorkspace } from "@/lib/workspaces/store";
-import { sessionsForWorkspace } from "@/lib/workspaces/derive";
+import { deleteProject, getProject } from "@/lib/projects/store";
+import { sessionsForProject } from "@/lib/projects/derive";
 import { pruneOrphanedWorktrees } from "@/lib/worktree-sweep";
 
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   if (process.env.TERMINUS_READ_ONLY === "true") {
     return NextResponse.json(
-      { error: "Workspace deletion disabled in read-only mode" },
+      { error: "Project deletion disabled in read-only mode" },
       { status: 403 }
     );
   }
@@ -33,19 +33,19 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
 
   const { id } = await ctx.params;
   if (!id) {
-    return NextResponse.json({ error: "Missing workspace id" }, { status: 400 });
+    return NextResponse.json({ error: "Missing project id" }, { status: 400 });
   }
 
-  const workspace = getWorkspace(id);
-  if (!workspace) {
-    return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
+  const project = getProject(id);
+  if (!project) {
+    return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
   try {
-    // Tear down every worktree (session + git worktree) belonging to the project.
-    const wtSessions = sessionsForWorkspace(workspace, listMetadata());
-    let removedWorktrees = 0;
-    for (const meta of wtSessions) {
+    // Tear down every workspace (session + git worktree) belonging to the project.
+    const wsSessions = sessionsForProject(project, listMetadata());
+    let removedWorkspaces = 0;
+    for (const meta of wsSessions) {
       try {
         killSession(meta.name);
       } catch {
@@ -58,15 +58,15 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
           // Best-effort: a failed worktree removal must not block the rest.
         }
       }
-      // Confirmed delete: prune this worktree's recordings (issue #9). Archiving
-      // a worktree keeps recordings; deleting the whole workspace purges them.
+      // Confirmed delete: prune this workspace's recordings (issue #9). Archiving
+      // a workspace keeps recordings; deleting the whole project purges them.
       try {
         deleteRecordingsForSession(meta.name);
       } catch {
-        // Best-effort: recording cleanup never blocks the workspace delete.
+        // Best-effort: recording cleanup never blocks the project delete.
       }
       await deleteMeta(meta.name);
-      removedWorktrees++;
+      removedWorkspaces++;
     }
 
     // Best-effort sweep: drop any orphaned worktree dirs whose sessions are gone
@@ -77,14 +77,14 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
       // Never block the delete on a sweep failure.
     }
 
-    await deleteWorkspace(id);
-    audit("workspace_deleted", {
+    await deleteProject(id);
+    audit("project_deleted", {
       username: username || undefined,
-      detail: `${workspace.name} (${workspace.repoRoot}) — ${removedWorktrees} worktree(s)`,
+      detail: `${project.name} (${project.repoRoot}) — ${removedWorkspaces} workspace(s)`,
     });
-    return NextResponse.json({ success: true, removedWorktrees });
+    return NextResponse.json({ success: true, removedWorkspaces });
   } catch (err) {
-    console.error("[api/workspaces DELETE]", err);
-    return NextResponse.json({ error: "Failed to delete workspace" }, { status: 500 });
+    console.error("[api/projects DELETE]", err);
+    return NextResponse.json({ error: "Failed to delete project" }, { status: 500 });
   }
 }

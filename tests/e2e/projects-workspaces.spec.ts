@@ -4,20 +4,20 @@ import * as path from "path";
 import { execFileSync } from "child_process";
 
 /**
- * E2E for Issue #12 — Workspaces & Worktrees (CORRECTED model).
+ * E2E for Issue #12 — Projects & Workspaces (CORRECTED model).
  *
- * A Workspace is a PROJECT/REPO container; worktrees (one task each = a git
- * worktree + branch + session) are nested UNDER the workspace header.
+ * A Project is a REPO container; workspaces (one task each = a git worktree +
+ * branch + session) are nested UNDER the project header.
  *
  * This spec, against the sandbox sample-repo (mounted as TERMINUS_ROOT by the
  * Playwright webServer):
- *  1. registers the repo as a workspace (POST /api/workspaces) and asserts
- *     GET /api/workspaces groups it (corrected hierarchy, no worktrees yet);
- *  2. creates a worktree via the new-session dialog, commits a change inside it,
- *     and asserts GET /api/workspaces derives that worktree WITH a +N diff stat
+ *  1. registers the repo as a project (POST /api/projects) and asserts
+ *     GET /api/projects groups it (corrected hierarchy, no workspaces yet);
+ *  2. creates a workspace via the new-session dialog, commits a change inside it,
+ *     and asserts GET /api/projects derives that workspace WITH a +N diff stat
  *     and an "in-progress" status (no GitHub PR bound in the sandbox);
- *  3. drives the AppShell left rail: workspace header (name + "+"), a nested
- *     worktree row (status icon + name + diff stat), and the "⋮" menu
+ *  3. drives the AppShell left rail: project header (name + "+"), a nested
+ *     workspace row (status icon + name + diff stat), and the "⋮" menu
  *     (Collapse, Archive) — all via stable data-testids.
  */
 
@@ -56,36 +56,36 @@ test.beforeAll(() => {
   gitSafe(SANDBOX_REPO, ["commit", "-m", "base"]);
 });
 
-test("POST then GET /api/workspaces groups the repo as a workspace (corrected model)", async ({
+test("POST then GET /api/projects groups the repo as a project (corrected model)", async ({
   request,
 }) => {
-  const reg = await request.post("/api/workspaces", { data: { directory: SANDBOX_REPO } });
+  const reg = await request.post("/api/projects", { data: { directory: SANDBOX_REPO } });
   expect(reg.ok()).toBe(true);
-  const { workspace } = await reg.json();
-  expect(workspace.repoRoot).toBe(fs.realpathSync(SANDBOX_REPO));
-  expect(workspace.id).toBeTruthy();
+  const { project } = await reg.json();
+  expect(project.repoRoot).toBe(fs.realpathSync(SANDBOX_REPO));
+  expect(project.id).toBeTruthy();
 
-  const list = await request.get("/api/workspaces");
+  const list = await request.get("/api/projects");
   expect(list.ok()).toBe(true);
-  const { workspaces } = await list.json();
-  const mine = workspaces.find(
-    (w: { repoRoot: string }) => w.repoRoot === fs.realpathSync(SANDBOX_REPO)
+  const { projects } = await list.json();
+  const mine = projects.find(
+    (p: { repoRoot: string }) => p.repoRoot === fs.realpathSync(SANDBOX_REPO)
   );
   expect(mine).toBeTruthy();
-  expect(Array.isArray(mine.worktrees)).toBe(true);
+  expect(Array.isArray(mine.workspaces)).toBe(true);
 });
 
-test("a worktree is derived under its workspace with a diff stat + status", async ({
+test("a workspace is derived under its project with a diff stat + status", async ({
   page,
   request,
 }) => {
-  // Register the workspace (idempotent).
-  await request.post("/api/workspaces", { data: { directory: SANDBOX_REPO } });
+  // Register the project (idempotent).
+  await request.post("/api/projects", { data: { directory: SANDBOX_REPO } });
 
   const sessionName = `e2e-ws-${uniqueSuffix()}`;
   const branch = `feature/e2e-ws-${uniqueSuffix()}`;
 
-  // Create a worktree via the new-session dialog (this is how worktrees are made).
+  // Create a workspace via the new-session dialog (this is how workspaces are made).
   await page.goto("/dashboard");
   await page
     .getByRole("button", { name: /new session/i })
@@ -126,22 +126,22 @@ test("a worktree is derived under its workspace with a diff stat + status", asyn
     "user.name=e2e",
     "commit",
     "-m",
-    "e2e worktree change",
+    "e2e workspace change",
   ]);
 
-  // The workspaces API now derives this session as a worktree under the repo,
+  // The projects API now derives this session as a workspace under the repo,
   // with a +3 diff stat and (no PR bound) an in-progress status.
   await expect
     .poll(
       async () => {
-        const res = await request.get("/api/workspaces");
+        const res = await request.get("/api/projects");
         if (!res.ok()) return null;
-        const { workspaces } = await res.json();
-        const ws = workspaces.find(
-          (w: { repoRoot: string }) => w.repoRoot === fs.realpathSync(SANDBOX_REPO)
+        const { projects } = await res.json();
+        const proj = projects.find(
+          (p: { repoRoot: string }) => p.repoRoot === fs.realpathSync(SANDBOX_REPO)
         );
-        return ws?.worktrees?.find(
-          (wt: { sessionName: string }) => wt.sessionName === sessionName
+        return proj?.workspaces?.find(
+          (ws: { sessionName: string }) => ws.sessionName === sessionName
         );
       },
       { timeout: 20_000 }
@@ -152,50 +152,50 @@ test("a worktree is derived under its workspace with a diff stat + status", asyn
       diffStat: { additions: 3, deletions: 0 },
     });
 
-  // ---- UI: the AppShell left rail groups the worktree under its workspace. ----
+  // ---- UI: the AppShell left rail groups the workspace under its project. ----
   await page.goto(`/workspace/${encodeURIComponent(sessionName)}`);
 
-  const sidebar = page.getByTestId("workspace-sidebar");
+  const sidebar = page.getByTestId("project-sidebar");
   await expect(sidebar).toBeVisible();
 
-  // Workspace header (name + add-worktree "+" + context menu).
-  const group = page.locator('[data-testid="workspace-group"]', {
-    has: page.locator(`[data-testid="worktree-row"][data-session="${sessionName}"]`),
+  // Project header (name + add-workspace "+" + context menu).
+  const group = page.locator('[data-testid="project-group"]', {
+    has: page.locator(`[data-testid="workspace-row"][data-session="${sessionName}"]`),
   });
-  await expect(group.getByTestId("workspace-name")).toBeVisible();
-  await expect(group.getByTestId("workspace-add-worktree")).toBeVisible();
+  await expect(group.getByTestId("project-name")).toBeVisible();
+  await expect(group.getByTestId("project-add-workspace")).toBeVisible();
 
-  // The nested worktree row: status icon + name + diff stat.
-  const row = group.locator(`[data-testid="worktree-row"][data-session="${sessionName}"]`);
+  // The nested workspace row: status icon + name + diff stat.
+  const row = group.locator(`[data-testid="workspace-row"][data-session="${sessionName}"]`);
   await expect(row).toBeVisible();
   await expect(row).toHaveAttribute("data-status", "in-progress");
   await expect(row.getByTestId("wt-icon-in-progress")).toBeVisible();
-  await expect(row.getByTestId("worktree-name")).toHaveText(branch);
-  await expect(row.getByTestId("worktree-diffstat")).toContainText("+3");
+  await expect(row.getByTestId("workspace-name")).toHaveText(branch);
+  await expect(row.getByTestId("workspace-diffstat")).toContainText("+3");
 
-  // The "⋮" worktree menu offers Collapse + Archive.
-  await row.getByTestId("worktree-menu-trigger").click();
-  const menu = row.getByTestId("worktree-menu");
+  // The "⋮" workspace menu offers Collapse + Archive.
+  await row.getByTestId("workspace-menu-trigger").click();
+  const menu = row.getByTestId("workspace-menu");
   await expect(menu).toBeVisible();
-  await expect(menu.getByTestId("worktree-menu-collapse")).toBeVisible();
-  await expect(menu.getByTestId("worktree-menu-archive")).toBeVisible();
+  await expect(menu.getByTestId("workspace-menu-collapse")).toBeVisible();
+  await expect(menu.getByTestId("workspace-menu-archive")).toBeVisible();
 
-  // The workspace "+" navigates to the new-worktree dialog scoped to this repo.
+  // The project "+" navigates to the new-workspace dialog scoped to this repo.
   await page.keyboard.press("Escape");
-  await group.getByTestId("workspace-add-worktree").click();
-  await expect(page).toHaveURL(/newWorktree=/);
+  await group.getByTestId("project-add-workspace").click();
+  await expect(page).toHaveURL(/newWorkspace=/);
 });
 
-test("the workspace context menu offers Delete workspace", async ({ page, request }) => {
-  await request.post("/api/workspaces", { data: { directory: SANDBOX_REPO } });
+test("the project context menu offers Delete project", async ({ page, request }) => {
+  await request.post("/api/projects", { data: { directory: SANDBOX_REPO } });
   await page.goto("/dashboard");
 
-  const sidebar = page.getByTestId("workspace-sidebar");
+  const sidebar = page.getByTestId("project-sidebar");
   await expect(sidebar).toBeVisible();
 
-  const group = page.getByTestId("workspace-group").first();
-  await group.getByTestId("workspace-menu-trigger").click();
-  const menu = group.getByTestId("workspace-menu");
+  const group = page.getByTestId("project-group").first();
+  await group.getByTestId("project-menu-trigger").click();
+  const menu = group.getByTestId("project-menu");
   await expect(menu).toBeVisible();
-  await expect(menu.getByTestId("workspace-menu-delete")).toHaveText(/delete workspace/i);
+  await expect(menu.getByTestId("project-menu-delete")).toHaveText(/delete project/i);
 });

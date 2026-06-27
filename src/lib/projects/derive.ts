@@ -1,21 +1,21 @@
-// Pure projection helpers for the Workspace → Worktree model (issue #12).
+// Pure projection helpers for the Project → Workspace model (issue #12).
 //
 // BROWSER-SAFE: no Node builtins, no server-only imports. These functions take
 // already-resolved inputs (sessions + diff stats + optional PR status) and
-// produce the WorkspaceView shape the sidebar renders. Keeping them pure means
+// produce the ProjectView shape the sidebar renders. Keeping them pure means
 // the grouping/status logic is unit-testable without git or GitHub.
 
 import type { PullRequestStatus } from "@/lib/github/types";
 import type {
   DiffStat,
-  Workspace,
+  Project,
+  ProjectView,
+  WorkspaceStatus,
   WorkspaceView,
-  WorktreeStatus,
-  WorktreeView,
-} from "@/types/workspace";
+} from "@/types/project";
 
 /** The session fields this projection needs (a structural subset of SessionMeta). */
-export interface WorktreeSessionLike {
+export interface WorkspaceSessionLike {
   name: string;
   worktree?: {
     repoRoot: string;
@@ -28,8 +28,8 @@ export interface WorktreeSessionLike {
 }
 
 /** Per-session resolved data the server gathers (best-effort, may be partial). */
-export interface WorktreeResolved {
-  /** Additions/deletions vs the workspace base; undefined while still loading. */
+export interface WorkspaceResolved {
+  /** Additions/deletions vs the project base; undefined while still loading. */
   diffStat?: DiffStat;
   /** Derived PR status when a PR is linked to the branch; absent otherwise. */
   prStatus?: PullRequestStatus;
@@ -39,7 +39,7 @@ export interface WorktreeResolved {
 }
 
 /**
- * Derive a worktree's sidebar status from its resolved git/PR state.
+ * Derive a workspace's sidebar status from its resolved git/PR state.
  *
  * Order matters:
  * - still loading → "loading" (spinner)
@@ -49,7 +49,7 @@ export interface WorktreeResolved {
  *
  * A closed-but-unmerged PR falls back to "in-progress" — the branch still lives.
  */
-export function deriveWorktreeStatus(resolved: WorktreeResolved): WorktreeStatus {
+export function deriveWorkspaceStatus(resolved: WorkspaceResolved): WorkspaceStatus {
   if (resolved.loading || resolved.diffStat === undefined) return "loading";
   switch (resolved.prStatus) {
     case "merged":
@@ -62,17 +62,17 @@ export function deriveWorktreeStatus(resolved: WorktreeResolved): WorktreeStatus
   }
 }
 
-/** Project one session + its resolved data into a WorktreeView. */
-export function toWorktreeView(
-  session: WorktreeSessionLike,
-  resolved: WorktreeResolved
-): WorktreeView {
+/** Project one session + its resolved data into a WorkspaceView. */
+export function toWorkspaceView(
+  session: WorkspaceSessionLike,
+  resolved: WorkspaceResolved
+): WorkspaceView {
   return {
     sessionName: session.name,
     branch: session.worktree?.branch ?? session.name,
     path: session.worktree?.path ?? "",
     diffStat: resolved.diffStat ?? { additions: 0, deletions: 0 },
-    status: deriveWorktreeStatus(resolved),
+    status: deriveWorkspaceStatus(resolved),
     ...(resolved.prNumber !== undefined ? { prNumber: resolved.prNumber } : {}),
     ...(session.collapsed !== undefined ? { collapsed: session.collapsed } : {}),
     ...(session.archived !== undefined ? { archived: session.archived } : {}),
@@ -80,24 +80,24 @@ export function toWorktreeView(
 }
 
 /**
- * Group sessions under a workspace by matching SessionMeta.worktree.repoRoot to
- * the workspace's repoRoot. Returns the session subset that belongs to the
- * workspace (order preserved). Pure — the server then resolves diff/PR per row.
+ * Group sessions under a project by matching SessionMeta.worktree.repoRoot to
+ * the project's repoRoot. Returns the session subset that belongs to the
+ * project (order preserved). Pure — the server then resolves diff/PR per row.
  */
-export function sessionsForWorkspace<T extends WorktreeSessionLike>(
-  workspace: Pick<Workspace, "repoRoot">,
+export function sessionsForProject<T extends WorkspaceSessionLike>(
+  project: Pick<Project, "repoRoot">,
   sessions: T[]
 ): T[] {
-  return sessions.filter((s) => s.worktree?.repoRoot === workspace.repoRoot);
+  return sessions.filter((s) => s.worktree?.repoRoot === project.repoRoot);
 }
 
-/** Assemble a full WorkspaceView from a workspace + its already-projected worktrees. */
-export function toWorkspaceView(workspace: Workspace, worktrees: WorktreeView[]): WorkspaceView {
-  return { ...workspace, worktrees };
+/** Assemble a full ProjectView from a project + its already-projected workspaces. */
+export function toProjectView(project: Project, workspaces: WorkspaceView[]): ProjectView {
+  return { ...project, workspaces };
 }
 
 /** Default display name for a repo root (its directory basename). */
-export function defaultWorkspaceName(repoRoot: string): string {
+export function defaultProjectName(repoRoot: string): string {
   const trimmed = repoRoot.replace(/[/\\]+$/, "");
   const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return idx === -1 ? trimmed : trimmed.slice(idx + 1) || trimmed;

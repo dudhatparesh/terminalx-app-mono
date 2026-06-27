@@ -32,8 +32,8 @@ function mockReq(headers: Record<string, string> = {}, body?: unknown) {
 // Fresh route modules per test so every store captures the per-test cwd.
 async function freshRoutes() {
   vi.resetModules();
-  const list = await import("@/app/api/workspaces/route");
-  const byId = await import("@/app/api/workspaces/[id]/route");
+  const list = await import("@/app/api/projects/route");
+  const byId = await import("@/app/api/projects/[id]/route");
   return { GET: list.GET, POST: list.POST, DELETE: byId.DELETE };
 }
 
@@ -45,7 +45,7 @@ function writeSessionsJson(cwd: string, metas: unknown[]) {
 
 const describeGit = hasGit() ? describe : describe.skip;
 
-describeGit("/api/workspaces (issue #12, corrected model)", () => {
+describeGit("/api/projects (issue #12, corrected model)", () => {
   let root: string;
   let cwd: string;
   let repo: string;
@@ -53,7 +53,7 @@ describeGit("/api/workspaces (issue #12, corrected model)", () => {
 
   beforeEach(() => {
     prevCwd = process.cwd();
-    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tx-wsroute-")));
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tx-projroute-")));
     process.env.TERMINUS_ROOT = root;
     cwd = path.join(root, "cwd");
     fs.mkdirSync(cwd, { recursive: true });
@@ -81,19 +81,19 @@ describeGit("/api/workspaces (issue #12, corrected model)", () => {
     expect(res.status).toBe(403);
   });
 
-  it("POST registers a repo as a workspace; GET groups it with no worktrees", async () => {
+  it("POST registers a repo as a project; GET groups it with no workspaces", async () => {
     const { POST, GET } = await freshRoutes();
     const postRes = await POST(mockReq(ADMIN, { directory: repo }));
     expect(postRes.status).toBe(201);
     const posted = await postRes.json();
-    expect(posted.workspace.repoRoot).toBe(fs.realpathSync(repo));
+    expect(posted.project.repoRoot).toBe(fs.realpathSync(repo));
 
     const getRes = await GET(mockReq(ADMIN));
     expect(getRes.status).toBe(200);
-    const { workspaces } = await getRes.json();
-    expect(workspaces).toHaveLength(1);
-    expect(workspaces[0].name).toBe("proj");
-    expect(workspaces[0].worktrees).toEqual([]);
+    const { projects } = await getRes.json();
+    expect(projects).toHaveLength(1);
+    expect(projects[0].name).toBe("proj");
+    expect(projects[0].workspaces).toEqual([]);
   });
 
   it("POST rejects a non-git directory with 400", async () => {
@@ -104,7 +104,7 @@ describeGit("/api/workspaces (issue #12, corrected model)", () => {
     expect(res.status).toBe(400);
   });
 
-  it("GET derives worktrees from sessions whose worktree.repoRoot matches, with a diff stat", async () => {
+  it("GET derives workspaces from sessions whose worktree.repoRoot matches, with a diff stat", async () => {
     const repoRoot = fs.realpathSync(repo);
     // A real git worktree on a branch with a change, so the numstat is non-zero.
     const wtPath = path.join(root, "wt-feature");
@@ -121,7 +121,7 @@ describeGit("/api/workspaces (issue #12, corrected model)", () => {
         worktree: { repoRoot, path: wtPath, branch: "feat/sidebar" },
       },
       {
-        // Different repo → must NOT be grouped under this workspace.
+        // Different repo → must NOT be grouped under this project.
         name: "other",
         kind: "bash",
         createdAt: new Date().toISOString(),
@@ -132,19 +132,19 @@ describeGit("/api/workspaces (issue #12, corrected model)", () => {
     const { POST, GET } = await freshRoutes();
     await POST(mockReq(ADMIN, { directory: repo }));
     const getRes = await GET(mockReq(ADMIN));
-    const { workspaces } = await getRes.json();
-    expect(workspaces).toHaveLength(1);
-    const wts = workspaces[0].worktrees;
-    expect(wts).toHaveLength(1);
-    expect(wts[0].sessionName).toBe("feat-sidebar");
-    expect(wts[0].branch).toBe("feat/sidebar");
-    expect(wts[0].diffStat.additions).toBe(3);
-    expect(wts[0].diffStat.deletions).toBe(0);
+    const { projects } = await getRes.json();
+    expect(projects).toHaveLength(1);
+    const wss = projects[0].workspaces;
+    expect(wss).toHaveLength(1);
+    expect(wss[0].sessionName).toBe("feat-sidebar");
+    expect(wss[0].branch).toBe("feat/sidebar");
+    expect(wss[0].diffStat.additions).toBe(3);
+    expect(wss[0].diffStat.deletions).toBe(0);
     // No GitHub binding in the sandbox → falls back to in-progress (branch icon).
-    expect(wts[0].status).toBe("in-progress");
+    expect(wss[0].status).toBe("in-progress");
   });
 
-  it("DELETE removes the workspace and tears down its worktrees", async () => {
+  it("DELETE removes the project and tears down its workspaces", async () => {
     const repoRoot = fs.realpathSync(repo);
     const wtPath = path.join(root, "wt-del");
     git(repo, ["worktree", "add", "-b", "feat/del", wtPath]);
@@ -160,16 +160,16 @@ describeGit("/api/workspaces (issue #12, corrected model)", () => {
 
     const { POST, DELETE, GET } = await freshRoutes();
     const posted = await (await POST(mockReq(ADMIN, { directory: repo }))).json();
-    const id = posted.workspace.id;
+    const id = posted.project.id;
 
     const delRes = await DELETE(mockReq(ADMIN), { params: Promise.resolve({ id }) });
     expect(delRes.status).toBe(200);
     const delBody = await delRes.json();
-    expect(delBody.removedWorktrees).toBe(1);
+    expect(delBody.removedWorkspaces).toBe(1);
 
-    // Workspace registration gone.
-    const { workspaces } = await (await GET(mockReq(ADMIN))).json();
-    expect(workspaces).toEqual([]);
+    // Project registration gone.
+    const { projects } = await (await GET(mockReq(ADMIN))).json();
+    expect(projects).toEqual([]);
     // Session meta dropped + the git worktree removed from disk.
     const remaining = JSON.parse(
       fs.readFileSync(path.join(cwd, "data", "ai-sessions.json"), "utf-8")
@@ -178,7 +178,7 @@ describeGit("/api/workspaces (issue #12, corrected model)", () => {
     expect(fs.existsSync(wtPath)).toBe(false);
   });
 
-  it("DELETE 404s for an unknown workspace id", async () => {
+  it("DELETE 404s for an unknown project id", async () => {
     const { DELETE } = await freshRoutes();
     const res = await DELETE(mockReq(ADMIN), { params: Promise.resolve({ id: "nope" }) });
     expect(res.status).toBe(404);

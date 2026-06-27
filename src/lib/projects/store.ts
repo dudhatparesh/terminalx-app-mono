@@ -1,14 +1,14 @@
-// Workspace registration store (issue #12, corrected model).
+// Project registration store (issue #12, corrected model).
 //
 // SERVER-ONLY (fs/path). Persists registered project/repo containers to
-// data/workspaces.json, keyed by repoRoot. Atomic writes (tmp + rename) and a
+// data/projects.json, keyed by repoRoot. Atomic writes (tmp + rename) and a
 // serialized withLock chain mirror ai-sessions.ts / settings/store.ts; the file
 // is written mode 0600. Reads degrade to an empty list on any error.
 //
-// A Workspace maps to ONE git repo. Worktrees are NOT stored here — they are
+// A Project maps to ONE git repo. Workspaces are NOT stored here — they are
 // derived from sessions whose SessionMeta.worktree.repoRoot matches (see
-// derive.ts). Deleting a workspace removes the project registration; the API
-// route additionally removes each worktree.
+// derive.ts). Deleting a project removes the project registration; the API
+// route additionally removes each workspace.
 
 import * as crypto from "crypto";
 import * as fs from "fs";
@@ -16,11 +16,11 @@ import * as path from "path";
 import { ensureSecureDir } from "@/lib/secure-dir";
 import { resolveSafePath, assertNotSensitivePath } from "@/lib/file-service";
 import { getGitDirectoryInfo } from "@/lib/git-worktree";
-import { defaultWorkspaceName } from "./derive";
-import type { Workspace } from "@/types/workspace";
+import { defaultProjectName } from "./derive";
+import type { Project } from "@/types/project";
 
 const DATA_DIR = path.join(process.cwd(), "data");
-const FILE = path.join(DATA_DIR, "workspaces.json");
+const FILE = path.join(DATA_DIR, "projects.json");
 
 let writeLock: Promise<void> = Promise.resolve();
 function withLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -32,97 +32,97 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-function atomicWrite(list: Workspace[]) {
+function atomicWrite(list: Project[]) {
   ensureSecureDir(DATA_DIR);
   const tmp = FILE + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(list, null, 2), { encoding: "utf-8", mode: 0o600 });
   fs.renameSync(tmp, FILE);
 }
 
-export function listWorkspaces(): Workspace[] {
+export function listProjects(): Project[] {
   try {
     ensureSecureDir(DATA_DIR);
     if (!fs.existsSync(FILE)) return [];
-    const parsed = JSON.parse(fs.readFileSync(FILE, "utf-8")) as Workspace[];
+    const parsed = JSON.parse(fs.readFileSync(FILE, "utf-8")) as Project[];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
-export function getWorkspace(id: string): Workspace | undefined {
-  return listWorkspaces().find((w) => w.id === id);
+export function getProject(id: string): Project | undefined {
+  return listProjects().find((p) => p.id === id);
 }
 
-export function getWorkspaceByRepoRoot(repoRoot: string): Workspace | undefined {
-  return listWorkspaces().find((w) => w.repoRoot === repoRoot);
+export function getProjectByRepoRoot(repoRoot: string): Project | undefined {
+  return listProjects().find((p) => p.repoRoot === repoRoot);
 }
 
-export class WorkspaceError extends Error {
+export class ProjectError extends Error {
   constructor(
     message: string,
     readonly status: number
   ) {
     super(message);
-    this.name = "WorkspaceError";
+    this.name = "ProjectError";
   }
 }
 
 /**
- * Register a workspace for a selected directory. Validates the directory is a
+ * Register a project for a selected directory. Validates the directory is a
  * git repo (via getGitDirectoryInfo, confined to TERMINUS_ROOT) and resolves it
- * to the repo ROOT so two checkouts of the same repo collapse to one workspace.
+ * to the repo ROOT so two checkouts of the same repo collapse to one project.
  * Idempotent: re-registering an existing repoRoot returns the existing record.
  */
-export async function registerWorkspace(input: {
+export async function registerProject(input: {
   directory: string;
   name?: string;
-}): Promise<Workspace> {
+}): Promise<Project> {
   // Confine to the sandbox before shelling out to git.
   let safeDir: string;
   try {
     safeDir = resolveSafePath(input.directory);
     assertNotSensitivePath(safeDir);
   } catch {
-    throw new WorkspaceError("Access denied", 403);
+    throw new ProjectError("Access denied", 403);
   }
 
   const info = getGitDirectoryInfo(safeDir);
   if (!info.isRepo || !info.root) {
-    throw new WorkspaceError("Selected directory is not a Git repository", 400);
+    throw new ProjectError("Selected directory is not a Git repository", 400);
   }
   const repoRoot = info.root;
 
   return withLock(async () => {
-    const list = listWorkspaces();
-    const existing = list.find((w) => w.repoRoot === repoRoot);
+    const list = listProjects();
+    const existing = list.find((p) => p.repoRoot === repoRoot);
     if (existing) return existing;
 
-    const name = (input.name?.trim() || info.repoName || defaultWorkspaceName(repoRoot)).slice(
+    const name = (input.name?.trim() || info.repoName || defaultProjectName(repoRoot)).slice(
       0,
       120
     );
-    const workspace: Workspace = {
+    const project: Project = {
       id: crypto.randomUUID(),
       repoRoot,
       name,
       createdAt: new Date().toISOString(),
     };
-    list.push(workspace);
+    list.push(project);
     atomicWrite(list);
-    return workspace;
+    return project;
   });
 }
 
 /**
- * Remove a workspace registration by id. Returns the removed record (so the
- * caller can tear down its worktrees) or undefined when no such id exists.
- * NOTE: this only drops the registration — worktree removal is the route's job.
+ * Remove a project registration by id. Returns the removed record (so the
+ * caller can tear down its workspaces) or undefined when no such id exists.
+ * NOTE: this only drops the registration — workspace removal is the route's job.
  */
-export async function deleteWorkspace(id: string): Promise<Workspace | undefined> {
+export async function deleteProject(id: string): Promise<Project | undefined> {
   return withLock(async () => {
-    const list = listWorkspaces();
-    const idx = list.findIndex((w) => w.id === id);
+    const list = listProjects();
+    const idx = list.findIndex((p) => p.id === id);
     if (idx === -1) return undefined;
     const [removed] = list.splice(idx, 1);
     atomicWrite(list);

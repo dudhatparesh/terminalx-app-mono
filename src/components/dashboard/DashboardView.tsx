@@ -321,18 +321,18 @@ export function DashboardView() {
     [loadDirectories]
   );
 
-  // Multi-workspace (#12): the workspace-header "+" navigates here with
-  // ?newWorktree=<repoRoot>; open the new-worktree dialog scoped to that repo
+  // Multi-project (#12): the project-header "+" navigates here with
+  // ?newWorkspace=<repoRoot>; open the new-workspace dialog scoped to that repo
   // once, then strip the param so a refresh doesn't re-open it.
-  const newWorktreeParam = searchParams?.get("newWorktree");
+  const newWorkspaceParam = searchParams?.get("newWorkspace");
   useEffect(() => {
-    if (!newWorktreeParam) return;
-    openDialog(newWorktreeParam);
+    if (!newWorkspaceParam) return;
+    openDialog(newWorkspaceParam);
     router.replace("/dashboard");
     // openDialog is stable (memoized on loadDirectories); intentionally run on
     // param change only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newWorktreeParam]);
+  }, [newWorkspaceParam]);
 
   useEffect(() => {
     if (showDialog && directoryPath === "." && directoryEntries.length === 0 && !directoryLoading) {
