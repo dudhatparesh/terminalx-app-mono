@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FileDiff as FileDiffModel } from "@/types/diff";
 import { FileDiff } from "./FileDiff";
+import type { LineCommentApi } from "./LineView";
 
 const VIRTUALIZE_THRESHOLD = 80;
 const ROW_HEIGHT = 36; // h-9
@@ -15,6 +16,8 @@ interface FileDiffListProps {
   layout: "unified" | "split";
   wordWrap?: boolean;
   loadFile?: (path: string) => Promise<FileDiffModel | null>;
+  /** Per-file inline-comment API factory (#3); absent => read-only diff. */
+  lineComments?: (filePath: string) => LineCommentApi;
 }
 
 /**
@@ -32,6 +35,7 @@ export function FileDiffList({
   layout,
   wordWrap,
   loadFile,
+  lineComments,
 }: FileDiffListProps) {
   const allCollapsed = files.every((f) => collapsed.has(f.id));
   const shouldVirtualize = files.length > VIRTUALIZE_THRESHOLD && allCollapsed;
@@ -48,6 +52,7 @@ export function FileDiffList({
             layout={layout}
             wordWrap={wordWrap}
             loadFile={loadFile}
+            lineComments={lineComments}
           />
         ))}
       </div>
@@ -62,6 +67,7 @@ export function FileDiffList({
       layout={layout}
       wordWrap={wordWrap}
       loadFile={loadFile}
+      lineComments={lineComments}
     />
   );
 }
@@ -73,6 +79,7 @@ function VirtualizedRows({
   layout,
   wordWrap,
   loadFile,
+  lineComments,
 }: FileDiffListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -111,6 +118,7 @@ function VirtualizedRows({
               layout={layout}
               wordWrap={wordWrap}
               loadFile={loadFile}
+              lineComments={lineComments}
             />
           ))}
         </div>

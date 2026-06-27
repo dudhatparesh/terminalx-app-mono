@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Columns2, RefreshCw, Rows3, WrapText } from "lucide-react";
 import { useSessionDiff } from "@/hooks/useSessionDiff";
 import { useDiffPrefs } from "@/hooks/useDiffPrefs";
+import { usePrReviewDrafts } from "@/hooks/usePrReviewDrafts";
+import { buildLineDraftInput } from "@/lib/pr-review/merge";
 import { FileDiffList } from "./FileDiffList";
+import type { LineCommentApi } from "./LineView";
 
 const SPLIT_MIN_WIDTH = 900; // spec §5: split needs width, else fall back to unified.
 const LARGE_FILE_LINES = 600; // spec §4.4: collapse big files by default.
@@ -16,6 +19,28 @@ const LARGE_FILE_LINES = 600; // spec §4.4: collapse big files by default.
 export function DiffViewer({ session }: { session: string | null }) {
   const { data, loading, error, refresh, loadFile } = useSessionDiff(session);
   const [prefs, setPrefs] = useDiffPrefs();
+  // Inline line comments (#3): the diff viewer owns the (server-persisted) draft
+  // store so a NEW top-level comment authored on a diff line lands in the SAME
+  // store the Review tab reads — it then surfaces there as a draft-only thread.
+  const drafts = usePrReviewDrafts(session);
+  // The single open line composer, addressed by `${path}:${line}:${side}`.
+  const [activeComposer, setActiveComposer] = useState<string | null>(null);
+
+  const lineComments = useCallback(
+    (filePath: string): LineCommentApi => ({
+      filePath,
+      isOpen: (line, side) => activeComposer === `${filePath}:${line}:${side}`,
+      onOpen: (line, side) => setActiveComposer(`${filePath}:${line}:${side}`),
+      onClose: () => setActiveComposer(null),
+      onSubmit: (line, side, body) => {
+        // NEW top-level draft (inReplyToId UNDEFINED) keyed by {file,line,side}.
+        void drafts.upsert(buildLineDraftInput({ path: filePath, line, side, body }));
+        setActiveComposer(null);
+      },
+    }),
+    [activeComposer, drafts]
+  );
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState<number>(360);
   // File ids the user has explicitly toggled this session — once toggled, we no
@@ -137,6 +162,7 @@ export function DiffViewer({ session }: { session: string | null }) {
             layout={effectiveLayout}
             wordWrap={prefs.wordWrap}
             loadFile={loadFile}
+            lineComments={session ? lineComments : undefined}
           />
         )}
       </div>

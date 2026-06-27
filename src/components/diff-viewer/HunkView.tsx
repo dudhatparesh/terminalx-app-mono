@@ -4,12 +4,14 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { DiffHunk } from "@/types/diff";
 import { pairLines } from "@/lib/diff-pairing";
-import { LineView, SplitCell } from "./LineView";
+import { LineView, SplitCell, type LineCommentApi } from "./LineView";
 
 interface HunkViewProps {
   hunk: DiffHunk;
   layout: "unified" | "split";
   wordWrap?: boolean;
+  /** Per-line inline-comment affordance + composer (#3); absent => read-only. */
+  comments?: LineCommentApi;
 }
 
 /**
@@ -17,7 +19,7 @@ interface HunkViewProps {
  * while keeping the header visible (spec §7). Renders unified or split per
  * `layout` (spec §5).
  */
-export function HunkView({ hunk, layout, wordWrap }: HunkViewProps) {
+export function HunkView({ hunk, layout, wordWrap, comments }: HunkViewProps) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
@@ -37,14 +39,14 @@ export function HunkView({ hunk, layout, wordWrap }: HunkViewProps) {
               <div key={`${hunk.index}-${i}`} className="flex">
                 <SplitCell line={left} side="old" wordWrap={wordWrap} />
                 <div className="w-px shrink-0 bg-[#1a1d24]" />
-                <SplitCell line={right} side="new" wordWrap={wordWrap} />
+                <SplitCell line={right} side="new" wordWrap={wordWrap} comments={comments} />
               </div>
             ))}
           </div>
         ) : (
           <div>
             {hunk.lines.map((line) => (
-              <LineView key={line.id} line={line} wordWrap={wordWrap} />
+              <LineView key={line.id} line={line} wordWrap={wordWrap} comments={comments} />
             ))}
           </div>
         ))}
