@@ -29,6 +29,10 @@ export const HARNESSES: HarnessDescriptor[] = [
     command: {
       bin: "claude",
       optionFlags: [{ when: "dangerouslySkipPermissions", flag: "--dangerously-skip-permissions" }],
+      // Issue #11: `claude --model <id>` selects the model; plan mode maps to the
+      // permission-mode flag. Data-driven so the route never special-cases claude.
+      modelFlag: "--model",
+      planModeFlag: "--permission-mode plan",
     },
   },
   {
@@ -36,7 +40,8 @@ export const HARNESSES: HarnessDescriptor[] = [
     label: "Codex",
     color: "#5ccfe6",
     auth: "cli",
-    command: { bin: "codex" },
+    // Issue #11: Codex selects its model with `-m <id>` (no plan-mode flag).
+    command: { bin: "codex", modelFlag: "-m" },
   },
   {
     id: "cursor",
@@ -53,7 +58,8 @@ export const HARNESSES: HarnessDescriptor[] = [
     auth: "none", // auth lives inside OpenCode's own per-provider config
     hostsProviders: true,
     docsUrl: "https://opencode.ai/docs",
-    command: { bin: "opencode" },
+    // Issue #11: OpenCode selects its model with `--model <provider/model>`.
+    command: { bin: "opencode", modelFlag: "--model" },
   },
 ];
 

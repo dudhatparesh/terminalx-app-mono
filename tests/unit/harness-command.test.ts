@@ -48,6 +48,60 @@ describe("commandForHarness", () => {
     expect(commandForHarness("opencode")).toBe(legacyWrapper("opencode"));
   });
 
+  // --- Feature #11: model + plan-mode threading (data-driven via registry) ---
+  describe("model threading (#11)", () => {
+    it("appends the claude model flag when a model is set", () => {
+      const cmd = commandForHarness("claude", { model: "opus-4-8-1m" });
+      expect(cmd).toBe(legacyWrapper("claude", ["--model", "opus-4-8-1m"]));
+    });
+
+    it("appends the codex model flag (-m) when a model is set", () => {
+      const cmd = commandForHarness("codex", { model: "gpt-5-codex" });
+      expect(cmd).toBe(legacyWrapper("codex", ["-m", "gpt-5-codex"]));
+    });
+
+    it("appends the opencode model flag when a model is set", () => {
+      const cmd = commandForHarness("opencode", { model: "anthropic/claude-sonnet" });
+      expect(cmd).toBe(legacyWrapper("opencode", ["--model", "anthropic/claude-sonnet"]));
+    });
+
+    it("leaves the command unchanged when no model is set (back-compat)", () => {
+      expect(commandForHarness("claude")).toBe(legacyWrapper("claude"));
+      expect(commandForHarness("claude", { model: undefined })).toBe(legacyWrapper("claude"));
+      expect(commandForHarness("claude", { model: "" })).toBe(legacyWrapper("claude"));
+    });
+
+    it("combines the model flag with --dangerously-skip-permissions for claude", () => {
+      const cmd = commandForHarness("claude", {
+        model: "sonnet-4-8",
+        dangerouslySkipPermissions: true,
+      });
+      expect(cmd).toBe(
+        legacyWrapper("claude", ["--dangerously-skip-permissions", "--model", "sonnet-4-8"])
+      );
+    });
+
+    it("ignores a model for bash (no binary, no flag)", () => {
+      expect(commandForHarness("bash", { model: "opus-4-8-1m" })).toBeNull();
+    });
+
+    it("ignores a model when the harness declares no model flag", () => {
+      // cursor has a binary but no modelFlag in the registry → command unchanged.
+      expect(commandForHarness("cursor", { model: "cursor-default" })).toBe(
+        legacyWrapper("cursor-agent")
+      );
+    });
+
+    it("appends the claude plan-mode flag when planMode is set", () => {
+      const cmd = commandForHarness("claude", { planMode: true });
+      expect(cmd).toBe(legacyWrapper("claude", ["--permission-mode", "plan"]));
+    });
+
+    it("does not append a plan-mode flag for harnesses that do not support it", () => {
+      expect(commandForHarness("codex", { planMode: true })).toBe(legacyWrapper("codex"));
+    });
+  });
+
   describe("opencode executable-path override", () => {
     const prev = process.env.TERMINALX_OPENCODE_BIN;
     afterEach(() => {

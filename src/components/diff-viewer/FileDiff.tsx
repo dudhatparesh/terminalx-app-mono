@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { FileDiff as FileDiffModel, FileStatus } from "@/types/diff";
 import { HunkView } from "./HunkView";
+import type { LineCommentApi } from "./LineView";
 
 /** lucide status icon + accent color per FileStatus (spec §4.3). */
 function StatusIcon({ status }: { status: FileStatus }) {
@@ -39,15 +40,26 @@ interface FileDiffProps {
   wordWrap?: boolean;
   /** Lazily fetch hunks for this file when expanded (spec §3.3). */
   loadFile?: (path: string) => Promise<FileDiffModel | null>;
+  /** Per-file inline-comment API factory (#3); absent => read-only diff. */
+  lineComments?: (filePath: string) => LineCommentApi;
 }
 
 /**
  * The screenshot's file row: muted dir + emphasized filename, +N/-N delta badge,
  * status icon; expands to a lazily-loaded body of HunkViews. spec §4.3.
  */
-export function FileDiff({ file, collapsed, onToggle, layout, wordWrap, loadFile }: FileDiffProps) {
+export function FileDiff({
+  file,
+  collapsed,
+  onToggle,
+  layout,
+  wordWrap,
+  loadFile,
+  lineComments,
+}: FileDiffProps) {
   const [hunks, setHunks] = useState(file.hunks);
   const [loading, setLoading] = useState(false);
+  const fileComments = lineComments?.(file.path);
 
   useEffect(() => {
     setHunks(file.hunks);
@@ -124,7 +136,13 @@ export function FileDiff({ file, collapsed, onToggle, layout, wordWrap, loadFile
             <div className="px-4 py-2 text-[12px] text-[#6b7569]">Loading diff…</div>
           ) : hunks && hunks.length > 0 ? (
             hunks.map((hunk) => (
-              <HunkView key={hunk.index} hunk={hunk} layout={layout} wordWrap={wordWrap} />
+              <HunkView
+                key={hunk.index}
+                hunk={hunk}
+                layout={layout}
+                wordWrap={wordWrap}
+                comments={fileComments}
+              />
             ))
           ) : (
             <div className="px-4 py-2 text-[12px] text-[#6b7569]">No textual changes</div>

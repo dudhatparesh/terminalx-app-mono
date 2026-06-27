@@ -121,6 +121,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         providers: config.providers,
         models: config.models,
+        endpoints: config.endpoints,
         configuredCount: config.providers.length,
         selectedModelCount: config.models.length,
       });
@@ -204,6 +205,7 @@ export async function POST(req: NextRequest) {
       success: true,
       providers: config.providers,
       models: config.models,
+      endpoints: config.endpoints,
       configuredCount: config.providers.length,
       selectedModelCount: config.models.length,
     });
@@ -258,6 +260,7 @@ export async function DELETE(req: NextRequest) {
       success: true,
       providers: config.providers,
       models: config.models,
+      endpoints: config.endpoints,
       configuredCount: config.providers.length,
       selectedModelCount: config.models.length,
     });

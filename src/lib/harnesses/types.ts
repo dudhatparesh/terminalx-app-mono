@@ -12,6 +12,17 @@ export type HarnessAuthMethod = "cli" | "api-key" | "none";
 export interface CommandOptions {
   /** claude-only today; data-driven via optionFlags. */
   dangerouslySkipPermissions?: boolean;
+  /**
+   * Issue #11: the harness-native model slug to launch (e.g. "opus-4-8-1m"),
+   * already stripped of its provider prefix. Emitted only when the harness
+   * declares a `modelFlag`. Empty/undefined leaves the command unchanged.
+   */
+  model?: string;
+  /**
+   * Issue #11: start the session in plan mode. Emitted only for harnesses that
+   * declare a `planModeFlag` (claude today); a no-op elsewhere.
+   */
+  planMode?: boolean;
 }
 
 /** How the session command is built for a harness. */
@@ -30,6 +41,20 @@ export interface HarnessCommandSpec {
     when: keyof CommandOptions;
     flag: string;
   }>;
+  /**
+   * Issue #11: the CLI flag that selects a model, e.g. "--model" (claude/opencode)
+   * or "-m" (codex). When set AND CommandOptions.model is non-empty, the builder
+   * appends `<modelFlag> <model>`. Absent => this harness ignores a chosen model
+   * (e.g. bash, cursor) so the launched command is unchanged. Data-driven so the
+   * sessions route never hard-codes a per-CLI model flag.
+   */
+  modelFlag?: string;
+  /**
+   * Issue #11: the CLI flag (with any value, space-joined) that starts the
+   * session in plan mode, e.g. "--permission-mode plan" for claude. Appended
+   * only when CommandOptions.planMode is true. Absent => plan mode is a no-op.
+   */
+  planModeFlag?: string;
 }
 
 export interface HarnessDescriptor {

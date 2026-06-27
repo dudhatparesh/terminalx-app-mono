@@ -10,6 +10,7 @@ import type {
   ReviewThread,
 } from "@/lib/github/types";
 import type {
+  CommentSide,
   DraftComment,
   MergedThread,
   ReviewFileGroup,
@@ -19,6 +20,39 @@ import { splitFilePath, threadKey } from "@/types/pr-review";
 
 /** Resolution map shape persisted alongside the session's drafts (§4.3). */
 export type ResolvedMap = Record<string, boolean>; // threadKey -> resolved
+
+/** Shape the drafts store's `upsert` accepts (browser-safe, no Node imports). */
+export interface LineDraftInput {
+  path: string;
+  line: number;
+  side?: CommentSide;
+  body: string;
+  /** Always undefined for a NEW top-level line comment (NOT a reply). */
+  inReplyToId?: undefined;
+}
+
+/**
+ * Build the upsert input for a NEW top-level inline comment on a diff line (#3).
+ *
+ * Unlike a reply (which sets inReplyToId to the thread root), a fresh line
+ * comment leaves inReplyToId UNDEFINED so mergeThreads turns it into a
+ * draft-only thread keyed by {path,line,side}. `side` defaults to RIGHT (the
+ * new-file side a reviewer annotates on an addition/context line).
+ */
+export function buildLineDraftInput(args: {
+  path: string;
+  line: number;
+  side?: CommentSide;
+  body: string;
+}): LineDraftInput {
+  return {
+    path: args.path,
+    line: args.line,
+    side: args.side ?? "RIGHT",
+    body: args.body.trim(),
+    inReplyToId: undefined,
+  };
+}
 
 /**
  * Merge posted review threads + local draft comments into per-file thread groups.
@@ -130,4 +164,43 @@ export function mergeIntoModel(
     byFile: groupByFile(merged),
     draftCount: drafts.length,
   };
+}
+
+/** Reconstruct the posted-only ReviewThreads from a snapshot model's groups. */
+function postedThreadsFromModel(byFile: ReviewFileGroup[]): ReviewThread[] {
+  const out: ReviewThread[] = [];
+  for (const group of byFile) {
+    for (const t of group.threads) {
+      if (t.comments.length === 0) continue; // draft-only — re-derived from live drafts
+      out.push({
+        path: t.path,
+        line: t.comments[0]?.line ?? t.line,
+        side: t.side,
+        resolved: t.resolved,
+        comments: t.comments,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Overlay the LIVE local drafts (from usePrReviewDrafts) onto a snapshot model's
+ * posted threads, re-merging into fresh file groups (#3). This lets a NEW
+ * top-level line comment surface as a draft thread IMMEDIATELY — including before
+ * any PR exists — without a server round-trip. The snapshot model supplies the
+ * posted comments + resolution; the live drafts supply replies and brand-new
+ * draft-only threads.
+ */
+export function overlayLiveDrafts(
+  byFile: ReviewFileGroup[],
+  liveDrafts: DraftComment[]
+): ReviewFileGroup[] {
+  const posted = postedThreadsFromModel(byFile);
+  const resolved: ResolvedMap = {};
+  for (const group of byFile) {
+    for (const t of group.threads) resolved[t.key] = t.resolved;
+  }
+  const merged = mergeThreads(posted, liveDrafts, resolved, indexComments(posted));
+  return groupByFile(merged);
 }
