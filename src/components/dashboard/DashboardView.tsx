@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   Bot,
@@ -200,6 +200,7 @@ function SessionRow({
 
 export function DashboardView() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { sessions, isLoading, createSession, killSession, setTelegramViewMode, refresh } =
     useSessions();
   const [showDialog, setShowDialog] = useState(false);
@@ -236,6 +237,28 @@ export function DashboardView() {
     }
   }, [workspaceConfig, kindTouched]);
 
+  // Models settings (feature #11, §5.1): seed the new-session kind from the
+  // resolved Default model's harness when the dialog opens and neither the user
+  // nor a workspace config has already chosen a kind. Per-session overrides do
+  // NOT write back to settings. Best-effort; never blocks dialog use.
+  useEffect(() => {
+    if (!showDialog || kindTouched || workspaceConfig) return;
+    let cancelled = false;
+    fetch("/api/settings?scope=user")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const modelId: string | undefined = d?.resolved?.defaultModel?.modelId;
+        const harness = modelId?.includes(":") ? modelId.split(":")[0] : undefined;
+        if (!cancelled && harness && getHarness(harness)) {
+          setKind(harness as SessionKind);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [showDialog, kindTouched, workspaceConfig]);
+
   const live = sessions.filter((s) => s.attached).length;
   const idle = sessions.length - live;
   const preview = slugify(name);
@@ -269,27 +292,47 @@ export function DashboardView() {
     }
   }, []);
 
-  const openDialog = useCallback(() => {
-    setName("");
-    setKind("bash");
-    setSkipPermissions(false);
-    setDirectoryPath(".");
-    setDirectoryRoot("");
-    setDirectoryInput(".");
-    setDirectoryEntries([]);
-    setDirectoryError(null);
-    setGitInfo({ isRepo: false });
-    setCreateWorktree(false);
-    setWorktreeBranch("");
-    setSymlinkShared(false);
-    setSymlinkPaths("node_modules");
-    setCreateError(null);
-    setRunSetupOnCreate(true);
-    setKindTouched(false);
-    setShowDialog(true);
-    void loadDirectories(".");
-    setTimeout(() => inputRef.current?.focus(), 50);
-  }, [loadDirectories]);
+  const openDialog = useCallback(
+    // Multi-workspace (#12): the sidebar's workspace "+" opens this dialog
+    // pre-scoped to a repo dir (and pre-enables worktree creation) so a new
+    // worktree lands inside that workspace's project.
+    (scopeDirectory?: string) => {
+      const dir = scopeDirectory && scopeDirectory.trim() ? scopeDirectory.trim() : ".";
+      setName("");
+      setKind("bash");
+      setSkipPermissions(false);
+      setDirectoryPath(dir);
+      setDirectoryRoot("");
+      setDirectoryInput(dir);
+      setDirectoryEntries([]);
+      setDirectoryError(null);
+      setGitInfo({ isRepo: false });
+      setCreateWorktree(Boolean(scopeDirectory));
+      setWorktreeBranch("");
+      setSymlinkShared(false);
+      setSymlinkPaths("node_modules");
+      setCreateError(null);
+      setRunSetupOnCreate(true);
+      setKindTouched(false);
+      setShowDialog(true);
+      void loadDirectories(dir);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    },
+    [loadDirectories]
+  );
+
+  // Multi-workspace (#12): the workspace-header "+" navigates here with
+  // ?newWorktree=<repoRoot>; open the new-worktree dialog scoped to that repo
+  // once, then strip the param so a refresh doesn't re-open it.
+  const newWorktreeParam = searchParams?.get("newWorktree");
+  useEffect(() => {
+    if (!newWorktreeParam) return;
+    openDialog(newWorktreeParam);
+    router.replace("/dashboard");
+    // openDialog is stable (memoized on loadDirectories); intentionally run on
+    // param change only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newWorktreeParam]);
 
   useEffect(() => {
     if (showDialog && directoryPath === "." && directoryEntries.length === 0 && !directoryLoading) {
@@ -373,7 +416,7 @@ export function DashboardView() {
 
         <div className="flex items-center gap-2 mt-5 mb-4">
           <button
-            onClick={openDialog}
+            onClick={() => openDialog()}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#002a17]
               border border-[#00cc6e] text-[#00ff88] text-[11px] hover:bg-[#00ff88]/10 transition-colors"
             style={{ boxShadow: "0 0 6px rgba(0, 255, 136, 0.35)" }}
@@ -408,7 +451,7 @@ export function DashboardView() {
           <div className="mt-10 p-10 text-center border border-dashed border-[#252933] rounded">
             <div className="text-[13px] text-[#a8b3a6]">no sessions. the box is lonely.</div>
             <button
-              onClick={openDialog}
+              onClick={() => openDialog()}
               className="mt-3 px-4 py-1.5 rounded bg-[#002a17] border border-[#00cc6e]
                 text-[#00ff88] text-[11px] hover:bg-[#00ff88]/10 transition-colors"
               style={{ boxShadow: "0 0 6px rgba(0, 255, 136, 0.35)" }}

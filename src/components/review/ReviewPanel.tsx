@@ -5,16 +5,25 @@ import { useState } from "react";
 import { CircleCheck, Eye, Files, GitCompare } from "lucide-react";
 import { FileBrowser } from "@/components/files/FileBrowser";
 import { useSessionDiff } from "@/hooks/useSessionDiff";
+import { useChecks } from "@/hooks/useChecks";
+import { usePrReview } from "@/hooks/usePrReview";
 import { DiffViewer } from "@/components/diff-viewer/DiffViewer";
+import { ChecksTab } from "@/components/review/checks/ChecksTab";
+import { rollupBadgeGlyph } from "@/components/review/checks/presentation";
 import { ReviewStatusBar, type ReviewStatusBarPr } from "./ReviewStatusBar";
+import { ReviewTab } from "./ReviewTab";
 
-type ReviewTab = "files" | "changes" | "checks" | "review";
+type ReviewTabId = "files" | "changes" | "checks" | "review";
 
 interface ReviewPanelProps {
   session: string | null;
-  /** PR metadata from the GitHub integration layer; absent until a PR exists. */
+  /**
+   * PR metadata override (tests/storybook). In normal use the panel sources the
+   * PR from the live review model (PR-review spec §5) so the status bar reflects
+   * real GitHub status.
+   */
   pr?: ReviewStatusBarPr;
-  defaultTab?: ReviewTab;
+  defaultTab?: ReviewTabId;
 }
 
 /**
@@ -25,11 +34,29 @@ interface ReviewPanelProps {
  */
 export function ReviewPanel({ session, pr, defaultTab = "changes" }: ReviewPanelProps) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<ReviewTab>(defaultTab);
+  const [activeTab, setActiveTab] = useState<ReviewTabId>(defaultTab);
+  const [createPrOpen, setCreatePrOpen] = useState(false);
   // Lightweight fetch shared with the Changes tab purely to source the count
   // badge; DiffViewer fetches its own data and caches at the browser level.
   const { data } = useSessionDiff(session);
   const changeCount = data?.summary.filesChanged;
+  // One shared Checks fetch (issue #6): drives both the tab content and the
+  // tab-strip rollup badge so the panel polls /api/checks once, not twice.
+  const checks = useChecks(session);
+  const checksBadge = checks.view ? rollupBadgeGlyph(checks.view.rollup) : null;
+
+  // PR-review (#8): one shared review controller drives BOTH the status bar PR
+  // pill and the Review tab body, so they never disagree or double-fetch.
+  const review = usePrReview(session);
+  const livePr: ReviewStatusBarPr | undefined =
+    pr ??
+    (review.model?.pr
+      ? {
+          number: review.model.pr.number,
+          htmlUrl: review.model.pr.htmlUrl,
+          status: review.model.pr.status,
+        }
+      : undefined);
 
   const tabs = [
     { id: "files" as const, label: "All files", icon: Files, badge: undefined },
@@ -37,6 +64,12 @@ export function ReviewPanel({ session, pr, defaultTab = "changes" }: ReviewPanel
     { id: "checks" as const, label: "Checks", icon: CircleCheck, badge: undefined },
     { id: "review" as const, label: "Review", icon: Eye, badge: undefined },
   ];
+
+  // Status-bar Create-PR jumps to the Review tab and opens the dialog (§5).
+  const onCreatePr = () => {
+    setActiveTab("review");
+    setCreatePrOpen(true);
+  };
 
   const onContinue = () => {
     if (session) router.push(`/workspace/${encodeURIComponent(session)}`);
@@ -52,7 +85,12 @@ export function ReviewPanel({ session, pr, defaultTab = "changes" }: ReviewPanel
 
   return (
     <div className="flex h-full flex-col bg-[#0a0b10]" data-testid="review-panel">
-      <ReviewStatusBar pr={pr} onContinue={onContinue} onArchive={onArchive} />
+      <ReviewStatusBar
+        pr={livePr}
+        onContinue={onContinue}
+        onArchive={onArchive}
+        onCreatePr={session ? onCreatePr : undefined}
+      />
 
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[#1a1d24] bg-[#0f1117] px-3">
         {tabs.map((tab) => (
@@ -76,6 +114,16 @@ export function ReviewPanel({ session, pr, defaultTab = "changes" }: ReviewPanel
                 {tab.badge}
               </span>
             )}
+            {tab.id === "checks" && checksBadge && (
+              <span
+                data-testid="review-checks-badge"
+                aria-hidden
+                className="ml-0.5 text-[11px] leading-none"
+                style={{ color: checksBadge.color }}
+              >
+                {checksBadge.glyph}
+              </span>
+            )}
           </button>
         ))}
         <span className="flex-1" />
@@ -87,19 +135,20 @@ export function ReviewPanel({ session, pr, defaultTab = "changes" }: ReviewPanel
         ) : activeTab === "changes" ? (
           <DiffViewer session={session} />
         ) : activeTab === "checks" ? (
-          <div
-            data-testid="review-checks-placeholder"
-            className="px-4 py-6 text-[12px] text-[#6b7569]"
-          >
-            Checks dashboard — coming soon.
-          </div>
+          <ChecksTab
+            sessionName={session}
+            view={checks.view}
+            isLoading={checks.isLoading}
+            error={checks.error}
+            onRefresh={checks.refresh}
+          />
         ) : (
-          <div
-            data-testid="review-review-placeholder"
-            className="px-4 py-6 text-[12px] text-[#6b7569]"
-          >
-            PR review — coming soon.
-          </div>
+          <ReviewTab
+            session={session}
+            controller={review}
+            dialogOpen={createPrOpen}
+            onDialogOpenChange={setCreatePrOpen}
+          />
         )}
       </div>
     </div>

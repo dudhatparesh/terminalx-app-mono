@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, ExternalLink, Play } from "lucide-react";
+import { Archive, ExternalLink, GitPullRequest, Play } from "lucide-react";
 
 /**
  * Shared shell type. In the full system this is
@@ -25,10 +25,15 @@ interface ReviewStatusBarProps {
   pr?: ReviewStatusBarPr;
   onContinue: () => void;
   onArchive: () => void;
+  /**
+   * Create-PR affordance for the #n slot (PR-review spec §5). When provided and
+   * there is no PR yet, the bar shows a "Create PR" button instead of the link.
+   */
+  onCreatePr?: () => void;
 }
 
 /** The screenshot's top bar: #n ↗, status pill, Continue, Archive. spec §4.1. */
-export function ReviewStatusBar({ pr, onContinue, onArchive }: ReviewStatusBarProps) {
+export function ReviewStatusBar({ pr, onContinue, onArchive, onCreatePr }: ReviewStatusBarProps) {
   return (
     <div
       data-testid="review-status-bar"
@@ -53,6 +58,16 @@ export function ReviewStatusBar({ pr, onContinue, onArchive }: ReviewStatusBarPr
             {pr.status}
           </span>
         </>
+      ) : onCreatePr ? (
+        // No PR for this branch yet — the #n slot becomes a Create-PR affordance (§5).
+        <button
+          data-testid="review-status-create-pr"
+          onClick={onCreatePr}
+          className="flex items-center gap-1 rounded border border-[#00cc6e] bg-[#002a17] px-1.5 py-0.5 text-[10px] text-[#00ff88] hover:bg-[#003d22]"
+        >
+          <GitPullRequest size={11} />
+          Create PR
+        </button>
       ) : null}
       <span className="flex-1" />
       <button

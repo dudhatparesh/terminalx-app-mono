@@ -4,53 +4,18 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { useRouter } from "next/navigation";
-import { ChevronRight, GitBranch, History, Plus, Settings, Sparkles, Terminal } from "lucide-react";
+import { ChevronRight, History, Plus, Settings } from "lucide-react";
 import { TopNav } from "./TopNav";
 import { StatusBar } from "./StatusBar";
+// Multi-workspace sidebar (#12): the left rail groups worktrees under their
+// workspace (project/repo) header. WorkspaceSidebar is boundary-clean (it only
+// imports browser-safe types + the fetch hook, never the server store/git).
+import { WorkspaceSidebar } from "./WorkspaceSidebar";
 // feature #2 (diff viewer): the right aside now hosts the Review panel, whose
 // "Changes" tab is the diff viewer. ReviewPanel supersedes RightPanel (spec §9.1).
 import { ReviewPanel } from "@/components/review/ReviewPanel";
 import { CommandPalette } from "./CommandPalette";
 import { useOpenTabs } from "@/hooks/useOpenTabs";
-import { useSessions, type SessionKind, type TmuxSession } from "@/hooks/useSessions";
-
-function KindGlyph({ kind }: { kind?: SessionKind }) {
-  if (kind === "claude") return <Sparkles size={13} className="text-[#d58fff] shrink-0" />;
-  if (kind === "codex") return <Terminal size={13} className="text-[#5ccfe6] shrink-0" />;
-  return <GitBranch size={13} className="text-[#6b7569] shrink-0" />;
-}
-
-function SidebarSession({
-  session,
-  activeSession,
-  onOpen,
-}: {
-  session: TmuxSession;
-  activeSession: string | null;
-  onOpen: (name: string) => void;
-}) {
-  const active = session.name === activeSession;
-
-  return (
-    <button
-      onClick={() => onOpen(session.name)}
-      className={`group flex h-9 w-full items-center gap-2 rounded px-2 text-left text-[12px] transition-colors ${
-        active
-          ? "bg-[#14161e] text-[#e6f0e4]"
-          : "text-[#a8b3a6] hover:bg-[#14161e] hover:text-[#e6f0e4]"
-      }`}
-    >
-      <KindGlyph kind={session.kind} />
-      <span className="min-w-0 flex-1 truncate">{session.name}</span>
-      <span
-        className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-          session.attached ? "bg-[#00ff88]" : "bg-[#3f4742]"
-        }`}
-        style={{ boxShadow: session.attached ? "0 0 6px rgba(0,255,136,.55)" : undefined }}
-      />
-    </button>
-  );
-}
 
 function LeftSidebar({
   activeSession,
@@ -61,11 +26,6 @@ function LeftSidebar({
 }) {
   const router = useRouter();
   const path = usePathname();
-  const { sessions, isLoading } = useSessions();
-
-  const openSession = (name: string) => {
-    router.push(`/workspace/${encodeURIComponent(name)}`);
-  };
 
   return (
     <aside className="hidden lg:flex h-full w-[286px] shrink-0 flex-col border-r border-[#1a1d24] bg-[#0f1117]">
@@ -107,41 +67,14 @@ function LeftSidebar({
             onClick={() => router.push("/dashboard")}
             className="rounded p-1 text-[#6b7569] transition-colors hover:bg-[#14161e] hover:text-[#e6f0e4]"
             aria-label="new workspace"
+            data-testid="sidebar-new-workspace"
           >
             <Plus size={12} />
           </button>
         </div>
 
-        <div className="mt-2 flex items-center gap-2 rounded px-2 py-2 text-[13px] text-[#e6f0e4]">
-          <span className="flex h-5 w-5 items-center justify-center rounded bg-[#002a17] text-[10px] text-[#00ff88]">
-            tx
-          </span>
-          <span className="min-w-0 flex-1 truncate">terminalx</span>
-          <button
-            onClick={() => router.push("/dashboard")}
-            className="text-[#6b7569] hover:text-[#e6f0e4]"
-            aria-label="new workspace"
-          >
-            <Plus size={13} />
-          </button>
-        </div>
-
-        <div className="mt-1 space-y-1">
-          {isLoading && sessions.length === 0 ? (
-            <div className="px-2 py-3 text-[11px] text-[#6b7569]">loading sessions...</div>
-          ) : sessions.length === 0 ? (
-            <div className="px-2 py-3 text-[11px] text-[#6b7569]">no live sessions</div>
-          ) : (
-            sessions.map((session) => (
-              <SidebarSession
-                key={session.name}
-                session={session}
-                activeSession={activeSession}
-                onOpen={openSession}
-              />
-            ))
-          )}
-        </div>
+        {/* #12: workspace (project) headers, each grouping its worktrees. */}
+        <WorkspaceSidebar activeSession={activeSession} />
       </div>
 
       <div className="flex h-12 items-center gap-2 border-t border-[#1a1d24] px-3 text-[#6b7569]">

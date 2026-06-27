@@ -34,7 +34,16 @@ export type AuditEvent =
   // Workspace config (feature #5):
   | "workspace_config_edited"
   | "workspace_script_run"
-  | "workspace_setup_run";
+  | "workspace_setup_run"
+  // Multi-workspace sidebar (feature #12): project registration + deletion.
+  | "workspace_registered"
+  | "workspace_deleted"
+  // Models & harness settings (feature #11): repo-scope settings write.
+  | "settings_repo_updated"
+  // OpenCode provider catalog (feature #8): records only the provider id + scope,
+  // never a provider secret (auth is delegated to OpenCode's config / .env).
+  | "opencode_provider_configured"
+  | "opencode_provider_removed";
 
 interface AuditEntry {
   timestamp: string;
