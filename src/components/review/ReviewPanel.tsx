@@ -5,7 +5,10 @@ import { useState } from "react";
 import { CircleCheck, Eye, Files, GitCompare } from "lucide-react";
 import { FileBrowser } from "@/components/files/FileBrowser";
 import { useSessionDiff } from "@/hooks/useSessionDiff";
+import { useChecks } from "@/hooks/useChecks";
 import { DiffViewer } from "@/components/diff-viewer/DiffViewer";
+import { ChecksTab } from "@/components/review/checks/ChecksTab";
+import { rollupBadgeGlyph } from "@/components/review/checks/presentation";
 import { ReviewStatusBar, type ReviewStatusBarPr } from "./ReviewStatusBar";
 
 type ReviewTab = "files" | "changes" | "checks" | "review";
@@ -30,6 +33,10 @@ export function ReviewPanel({ session, pr, defaultTab = "changes" }: ReviewPanel
   // badge; DiffViewer fetches its own data and caches at the browser level.
   const { data } = useSessionDiff(session);
   const changeCount = data?.summary.filesChanged;
+  // One shared Checks fetch (issue #6): drives both the tab content and the
+  // tab-strip rollup badge so the panel polls /api/checks once, not twice.
+  const checks = useChecks(session);
+  const checksBadge = checks.view ? rollupBadgeGlyph(checks.view.rollup) : null;
 
   const tabs = [
     { id: "files" as const, label: "All files", icon: Files, badge: undefined },
@@ -76,6 +83,16 @@ export function ReviewPanel({ session, pr, defaultTab = "changes" }: ReviewPanel
                 {tab.badge}
               </span>
             )}
+            {tab.id === "checks" && checksBadge && (
+              <span
+                data-testid="review-checks-badge"
+                aria-hidden
+                className="ml-0.5 text-[11px] leading-none"
+                style={{ color: checksBadge.color }}
+              >
+                {checksBadge.glyph}
+              </span>
+            )}
           </button>
         ))}
         <span className="flex-1" />
@@ -87,12 +104,13 @@ export function ReviewPanel({ session, pr, defaultTab = "changes" }: ReviewPanel
         ) : activeTab === "changes" ? (
           <DiffViewer session={session} />
         ) : activeTab === "checks" ? (
-          <div
-            data-testid="review-checks-placeholder"
-            className="px-4 py-6 text-[12px] text-[#6b7569]"
-          >
-            Checks dashboard — coming soon.
-          </div>
+          <ChecksTab
+            sessionName={session}
+            view={checks.view}
+            isLoading={checks.isLoading}
+            error={checks.error}
+            onRefresh={checks.refresh}
+          />
         ) : (
           <div
             data-testid="review-review-placeholder"
