@@ -15,14 +15,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getUserScoping } from "@/lib/session-scope";
 import { audit } from "@/lib/audit-log";
 import { listMetadata, type SessionMeta } from "@/lib/ai-sessions";
-import {
-  listWorkspaces,
-  registerWorkspace,
-  WorkspaceError,
-} from "@/lib/workspaces/store";
+import { listWorkspaces, registerWorkspace, WorkspaceError } from "@/lib/workspaces/store";
 import { resolveWorktree } from "@/lib/workspaces/resolve";
 import { sessionsForWorkspace, toWorktreeView, toWorkspaceView } from "@/lib/workspaces/derive";
+import { autoArchiveMergedWorktrees } from "@/lib/auto-archive";
 import type { WorkspaceView } from "@/types/workspace";
+import type { PullRequestStatus } from "@/lib/github/types";
 
 export async function GET(req: NextRequest) {
   const { hasIdentity } = getUserScoping(req.headers);
@@ -34,6 +32,10 @@ export async function GET(req: NextRequest) {
     const workspaces = listWorkspaces();
     const sessions = listMetadata();
 
+    // Capture each worktree's resolved PR status so the auto-archive trigger can
+    // reuse it (no extra GitHub calls). Keyed by session name.
+    const prStatusByName = new Map<string, PullRequestStatus | undefined>();
+
     const views: WorkspaceView[] = await Promise.all(
       workspaces.map(async (ws) => {
         const wtSessions = sessionsForWorkspace(ws, sessions);
@@ -42,12 +44,22 @@ export async function GET(req: NextRequest) {
             // Best-effort: resolveWorktree never throws; a failed diff/PR lookup
             // yields a zero stat / no PR so the row degrades to "in-progress".
             const resolved = await resolveWorktree(meta);
+            prStatusByName.set(meta.name, resolved.prStatus);
             return toWorktreeView(meta, resolved);
           })
         );
         return toWorkspaceView(ws, worktrees);
       })
     );
+
+    // Auto-archive trigger (issue #9): any worktree whose PR is merged is
+    // archived best-effort, reusing the PR status already resolved above so this
+    // adds no network calls. Fire-and-forget — the next refresh reflects it.
+    void autoArchiveMergedWorktrees({
+      resolvePrStatus: async (meta) => prStatusByName.get(meta.name),
+    }).catch(() => {
+      // Never let auto-archive affect the GET response.
+    });
 
     return NextResponse.json({ workspaces: views });
   } catch (err) {

@@ -13,8 +13,10 @@ interface UseWorkspacesReturn {
   deleteWorkspace: (id: string) => Promise<boolean>;
   /** Collapse/expand a single worktree row. */
   setWorktreeCollapsed: (sessionName: string, collapsed: boolean) => Promise<boolean>;
-  /** Archive a single worktree (minimal hook; #9 completes restore/cleanup). */
+  /** Archive a single worktree: removes the git worktree, keeps the branch (#9). */
   archiveWorktree: (sessionName: string) => Promise<boolean>;
+  /** Restore an archived worktree: recreates the git worktree from its branch (#9). */
+  restoreWorktree: (sessionName: string) => Promise<boolean>;
 }
 
 export function useWorkspaces(): UseWorkspacesReturn {
@@ -78,10 +80,18 @@ export function useWorkspaces(): UseWorkspacesReturn {
     [patchSession, refresh]
   );
 
+  // Archive/restore go through dedicated server routes (not the PATCH flag hook)
+  // so the worktree's git/fs lifecycle (remove-on-archive, recreate-on-restore)
+  // runs server-side. The client just calls the API and refreshes.
   const archiveWorktree = useCallback(
     async (sessionName: string): Promise<boolean> => {
       try {
-        await patchSession(sessionName, { archived: true });
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionName)}/archive`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (!res.ok) throw new Error(`Failed to archive worktree: ${res.status}`);
         await refresh();
         return true;
       } catch (err) {
@@ -89,7 +99,26 @@ export function useWorkspaces(): UseWorkspacesReturn {
         return false;
       }
     },
-    [patchSession, refresh]
+    [refresh]
+  );
+
+  const restoreWorktree = useCallback(
+    async (sessionName: string): Promise<boolean> => {
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionName)}/restore`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (!res.ok) throw new Error(`Failed to restore worktree: ${res.status}`);
+        await refresh();
+        return true;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to restore worktree");
+        return false;
+      }
+    },
+    [refresh]
   );
 
   useEffect(() => {
@@ -104,5 +133,6 @@ export function useWorkspaces(): UseWorkspacesReturn {
     deleteWorkspace,
     setWorktreeCollapsed,
     archiveWorktree,
+    restoreWorktree,
   };
 }
