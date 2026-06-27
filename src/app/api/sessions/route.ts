@@ -7,10 +7,19 @@ import {
   listMetadata,
   saveMeta,
   deleteMeta,
+  getMeta,
   commandForKind,
   isValidKind,
   ensureManagedSession,
 } from "@/lib/ai-sessions";
+// Issue #4: validation message is now sourced from the harness registry so new
+// harnesses (cursor/opencode) need no edit here.
+import { listHarnesses, getHarness } from "@/lib/harnesses/registry";
+// Issue #11: resolve the effective Models settings for a new session and thread
+// the chosen model + plan mode into the harness command (data-driven via the
+// registry's modelFlag/planModeFlag — no per-CLI hard-coding here).
+import { resolveSessionModelSettings } from "@/lib/settings/session-settings";
+import { modelOptionsForKind } from "@/lib/harnesses/session-model";
 import { listTopics } from "@/lib/telegram/state";
 import { botIsConfigured, type BotIdentity } from "@/lib/telegram/auth";
 import { ensureTopicForSession } from "@/lib/telegram/bot";
@@ -18,6 +27,32 @@ import { getEnsureTopic } from "@/lib/telegram/bot-bridge";
 import { getConfiguredMaxSessions } from "@/lib/security-config";
 import { assertNotSensitivePath, resolveSafePath } from "@/lib/file-service";
 import { createGitWorktreeForSession, removeGitWorktree } from "@/lib/git-worktree";
+// Workspace config (feature #5): resolve repo config, allocate a per-workspace
+// port, copy declared files into a fresh worktree, prefix env, run setup.
+import { resolveWorkspaceConfig, copyConfiguredFiles } from "@/lib/workspace-config";
+import { allocateWorkspacePort } from "@/lib/workspace-port";
+import { withWorkspaceEnv, runSetup } from "@/lib/workspace-setup";
+
+/**
+ * Accept either an array of paths or a comma/newline-separated string from the
+ * dialog and normalize to a trimmed, de-duplicated, relative-only list. Returns
+ * undefined when nothing usable is supplied so the lib applies its env default.
+ */
+function normalizeSymlinkPaths(input: unknown): string[] | undefined {
+  if (input === undefined || input === null) return undefined;
+  const raw = Array.isArray(input) ? input : typeof input === "string" ? input.split(/[,\n]/) : [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of raw) {
+    const trimmed = typeof entry === "string" ? entry.trim() : "";
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  // An explicit empty selection should disable sharing (override env default),
+  // so return [] rather than undefined when the caller sent something.
+  return out;
+}
 
 function resolveSessionStartDir(requestedCwd: unknown): string {
   const requested =
@@ -67,6 +102,11 @@ export async function GET(req: NextRequest) {
         kind: meta?.kind ?? "bash",
         cwd: meta?.cwd ?? s.activePath,
         worktree: meta?.worktree,
+        // Feature #5: surface the per-workspace injected port + setup lifecycle so
+        // clients (command palette, workspace UI) can read TERMINALX_PORT and the
+        // setup status. Persisted on create but previously dropped from this list.
+        port: meta?.port,
+        setup: meta?.setup,
         managed: ensureManagedSession(s.name),
         telegram: telegram
           ? {
@@ -95,7 +135,8 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, kind, dangerouslySkipPermissions, cwd, worktree } = body;
+    // `skipSetup` (feature #5): let the dashboard create without auto-running setup.
+    const { name, kind, dangerouslySkipPermissions, cwd, worktree, skipSetup } = body;
 
     if (!name || typeof name !== "string") {
       return NextResponse.json({ error: "Missing or invalid session name" }, { status: 400 });
@@ -110,8 +151,12 @@ export async function POST(req: NextRequest) {
 
     const sessionKind = kind === undefined ? "bash" : kind;
     if (!isValidKind(sessionKind)) {
+      // Issue #4: dynamic list from the registry instead of a hard-coded string.
+      const ids = listHarnesses()
+        .map((h) => h.id)
+        .join(", ");
       return NextResponse.json(
-        { error: "Invalid session kind: expected bash, claude, or codex" },
+        { error: `Invalid session kind: expected one of ${ids}` },
         { status: 400 }
       );
     }
@@ -129,10 +174,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const command = commandForKind(sessionKind, {
-      dangerouslySkipPermissions: Boolean(dangerouslySkipPermissions),
-    });
-
     let startDir: string;
     let createdWorktree:
       | {
@@ -140,12 +181,22 @@ export async function POST(req: NextRequest) {
           worktreePath: string;
           startDir: string;
           branch: string;
+          linkedPaths: string[];
         }
       | undefined;
+    // Source checkout to copy declared files FROM (the dir the user selected,
+    // before it was rebased onto the worktree path).
+    let sourceCheckout: string | undefined;
     try {
       startDir = resolveSessionStartDir(cwd);
       if (worktree?.create === true) {
-        createdWorktree = createGitWorktreeForSession(startDir, worktree.branch);
+        sourceCheckout = startDir;
+        const symlinkPaths = normalizeSymlinkPaths(worktree.symlinkPaths);
+        createdWorktree = createGitWorktreeForSession(
+          startDir,
+          worktree.branch,
+          symlinkPaths ? { symlinkPaths } : undefined
+        );
         startDir = createdWorktree.startDir;
       }
     } catch (err) {
@@ -153,6 +204,59 @@ export async function POST(req: NextRequest) {
       const { error, status } = directoryErrorResponse(message);
       return NextResponse.json({ error: worktree?.create === true ? message : error }, { status });
     }
+
+    // --- Workspace config (feature #5) -------------------------------------
+    // Resolve config for the repo backing this session, allocate a stable
+    // per-workspace port, copy declared files into a fresh worktree, and prefix
+    // the session command with the workspace env so the interactive shell
+    // inherits TERMINALX_PORT + config.env. Never throws on missing/malformed
+    // config — degrades to defaults.
+    const wsRepoRoot = createdWorktree?.repoRoot ?? startDir;
+    let port: number;
+    try {
+      port = await allocateWorkspacePort();
+    } catch {
+      // Port range exhausted — fail clearly so the user can widen the range.
+      if (createdWorktree) {
+        removeGitWorktree(createdWorktree.worktreePath, createdWorktree.repoRoot);
+      }
+      return NextResponse.json(
+        { error: "No free workspace port available — widen TERMINALX_PORT_RANGE" },
+        { status: 503 }
+      );
+    }
+    const wsConfig = resolveWorkspaceConfig(wsRepoRoot, { port });
+    if (createdWorktree && sourceCheckout) {
+      // Copy `.env`/`.env.local` "if you have one" into the new worktree.
+      copyConfiguredFiles(sourceCheckout, createdWorktree.worktreePath, wsConfig.copyFiles);
+    }
+
+    // --- Models settings (feature #11) -------------------------------------
+    // Resolve the effective Models settings for this repo (registry default <
+    // user < repo) and thread the chosen model + plan mode into the harness
+    // command. modelOptionsForKind drops the model when its harness prefix does
+    // not match the session kind, so a Codex default never reaches `claude`.
+    // Existing behavior is preserved: with no model set (or a non-matching
+    // harness) commandForKind emits the byte-identical legacy command.
+    const sessionModel = resolveSessionModelSettings(wsRepoRoot);
+    const modelOpts = modelOptionsForKind(sessionKind, {
+      // Only pass an explicit model: a bare registry default lets the CLI pick
+      // its own default so vanilla sessions keep the legacy command unchanged.
+      modelId: sessionModel.modelExplicit ? sessionModel.modelId : undefined,
+      planMode: sessionModel.planMode,
+    });
+    const baseCommand = commandForKind(sessionKind, {
+      dangerouslySkipPermissions: Boolean(dangerouslySkipPermissions),
+      ...modelOpts,
+    });
+    // Persist the resolved Models settings only for harnesses that drive a model
+    // (those with a binary). bash has no model so its records stay legacy-clean.
+    const persistModelMeta = getHarness(sessionKind)?.command.bin != null;
+
+    const wsEnv = { TERMINALX_PORT: String(port), ...wsConfig.env };
+    const command = baseCommand
+      ? withWorkspaceEnv(baseCommand, wsEnv)
+      : withWorkspaceEnv("exec bash -l", wsEnv);
 
     try {
       createSession(finalName, command ?? undefined, startDir);
@@ -163,6 +267,9 @@ export async function POST(req: NextRequest) {
       throw err;
     }
 
+    // Setup auto-runs only on worktree creation with a configured setup script,
+    // unless the caller opted out via skipSetup.
+    const willRunSetup = Boolean(createdWorktree && wsConfig.setup && skipSetup !== true);
     await saveMeta({
       name: finalName,
       kind: sessionKind,
@@ -175,9 +282,36 @@ export async function POST(req: NextRequest) {
             repoRoot: createdWorktree.repoRoot,
             path: createdWorktree.worktreePath,
             branch: createdWorktree.branch,
+            linkedPaths: createdWorktree.linkedPaths,
           }
         : undefined,
+      port,
+      setup: wsConfig.setup ? { status: willRunSetup ? "pending" : "skipped" } : undefined,
+      // Feature #11: persist the resolved Models settings on the AI session so
+      // the UI can show what launched + a later relaunch is reproducible. Only
+      // recorded for model-bearing harnesses (bash has no model) — keeps legacy
+      // bash records byte-identical.
+      ...(persistModelMeta
+        ? {
+            modelId: sessionModel.modelId,
+            effort: sessionModel.effort,
+            personality: sessionModel.personality,
+            planMode: sessionModel.planMode,
+            fastMode: sessionModel.fastMode,
+          }
+        : {}),
     });
+
+    // Fire-and-stream the setup run (async). Status is polled via GET /api/sessions.
+    if (willRunSetup && createdWorktree && wsConfig.setup) {
+      void runSetup({
+        sessionName: finalName,
+        cwd: createdWorktree.worktreePath,
+        command: wsConfig.setup.command,
+        env: wsEnv,
+        timeoutSeconds: wsConfig.setup.timeoutSeconds ?? 1800,
+      });
+    }
     let telegramTopic: {
       topicId: number;
       sessionName: string;
@@ -256,7 +390,13 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
+    const meta = getMeta(name);
     killSession(name);
+    if (meta?.worktree) {
+      // Removes the worktree and any shared symlinks WITHOUT touching the
+      // shared source (rmSync/unlink never follow the link into its target).
+      removeGitWorktree(meta.worktree.path, meta.worktree.repoRoot, meta.worktree.linkedPaths);
+    }
     await deleteMeta(name);
     audit("session_deleted", { username: username || undefined, detail: name });
     return NextResponse.json({ success: true });

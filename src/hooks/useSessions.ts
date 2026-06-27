@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export type SessionKind = "bash" | "claude" | "codex";
+// Issue #4: SessionKind is now the open harness-registry id set, sourced from a
+// single shared (client-safe) place instead of being redeclared here. Both the
+// server (ai-sessions.ts) and this client hook route through the registry so
+// the type can never drift.
+export type SessionKind = string;
 export type TelegramViewMode = "chat" | "screen" | "off";
 
 export interface TmuxSession {
@@ -33,7 +37,11 @@ export interface CreateSessionOptions {
   worktree?: {
     create: boolean;
     branch?: string;
+    /** Repo-root-relative paths to symlink into the new worktree (heavy dirs). */
+    symlinkPaths?: string[];
   };
+  /** Workspace config (feature #5): skip auto-running the setup script on create. */
+  skipSetup?: boolean;
 }
 
 interface UseSessionsReturn {
@@ -86,6 +94,7 @@ export function useSessions(): UseSessionsReturn {
             dangerouslySkipPermissions: options.dangerouslySkipPermissions,
             cwd: options.cwd,
             worktree: options.worktree,
+            skipSetup: options.skipSetup,
           }),
         });
         if (!res.ok) {

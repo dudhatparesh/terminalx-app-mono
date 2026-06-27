@@ -64,6 +64,7 @@
   },
   "devDependencies": {
     "@eslint/compat": "^2.1.0",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4",
     "@types/bcryptjs": "^3.0.0",
     "@types/node": "^25",

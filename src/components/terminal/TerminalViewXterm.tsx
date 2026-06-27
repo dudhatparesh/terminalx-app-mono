@@ -199,6 +199,20 @@ export function TerminalViewXterm({
     terminal.open(containerRef.current);
     fitAddon.fit();
 
+    // Let app-level shortcuts win over the terminal. When the terminal has focus,
+    // xterm otherwise consumes the keystroke (and writes nothing useful to the
+    // PTY) for Cmd/Ctrl+K — which is the command-palette shortcut handled at the
+    // AppShell (window) level. Returning false tells xterm to ignore the event so
+    // it bubbles to the window listener instead of being swallowed here.
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown") return true;
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && event.key.toLowerCase() === "k") {
+        return false;
+      }
+      return true;
+    });
+
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 

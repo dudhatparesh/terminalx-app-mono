@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   Bot,
+  Boxes,
   ChevronUp,
+  Code,
   Copy,
   Folder,
   FolderOpen,
@@ -22,20 +24,30 @@ import {
   type TelegramViewMode,
   type TmuxSession,
 } from "@/hooks/useSessions";
+// Issue #4: harness registry drives the new-session kind toggle + icons so
+// adding cursor/opencode needs no dashboard edit.
+import { listHarnesses, getHarness } from "@/lib/harnesses/registry";
+// Workspace config (feature #5): default kind + setup summary in the dialog.
+import { useWorkspaceConfig } from "@/hooks/useWorkspaceConfig";
 
 function slugify(raw: string): string {
+  // Preserve characters the session API already accepts (a-z 0-9 _ . -) so a
+  // typed name like "e2e-symlink-123" round-trips to the same session name.
   return raw
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/[^a-z0-9 _.-]/g, "")
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
 
 function KindIcon({ kind }: { kind?: SessionKind }) {
+  // Issue #4: keep existing claude/codex mappings; add cursor/opencode.
   if (kind === "claude") return <Sparkles size={14} className="text-[#d58fff] shrink-0" />;
   if (kind === "codex") return <Bot size={14} className="text-[#5ccfe6] shrink-0" />;
+  if (kind === "cursor") return <Code size={14} className="text-[#7dd3fc] shrink-0" />;
+  if (kind === "opencode") return <Boxes size={14} className="text-[#ffa657] shrink-0" />;
   return <Terminal size={14} className="text-[#6b7569] shrink-0" />;
 }
 
@@ -63,6 +75,14 @@ function parentDirectory(path: string, root: string): string {
 
 function defaultBranchName(sessionName: string): string {
   return sessionName ? `feature/${sessionName}` : "feature/";
+}
+
+// Issue #4: data-driven check — does this harness expose the
+// dangerouslySkipPermissions option flag? (replaces the literal kind==="claude").
+function harnessSupportsSkipPermissions(kind: SessionKind): boolean {
+  return Boolean(
+    getHarness(kind)?.command.optionFlags?.some((f) => f.when === "dangerouslySkipPermissions")
+  );
 }
 
 function branchLooksValid(branch: string): boolean {
@@ -180,6 +200,7 @@ function SessionRow({
 
 export function DashboardView() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { sessions, isLoading, createSession, killSession, setTelegramViewMode, refresh } =
     useSessions();
   const [showDialog, setShowDialog] = useState(false);
@@ -195,9 +216,48 @@ export function DashboardView() {
   const [gitInfo, setGitInfo] = useState<GitDirectoryInfo>({ isRepo: false });
   const [createWorktree, setCreateWorktree] = useState(false);
   const [worktreeBranch, setWorktreeBranch] = useState("");
+  const [symlinkShared, setSymlinkShared] = useState(false);
+  const [symlinkPaths, setSymlinkPaths] = useState("node_modules");
   const [createError, setCreateError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Workspace config (feature #5): run-setup-on-create + kind-from-config.
+  const [runSetupOnCreate, setRunSetupOnCreate] = useState(true);
+  const [kindTouched, setKindTouched] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Resolve workspace config for the selected repo (when the dir is a git repo).
+  const { config: workspaceConfig } = useWorkspaceConfig(
+    showDialog && gitInfo.isRepo && gitInfo.root ? { repoRoot: gitInfo.root } : null
+  );
+
+  // Default the kind selector to config.defaultKind unless the user picked one.
+  useEffect(() => {
+    if (workspaceConfig && !kindTouched) {
+      setKind(workspaceConfig.defaultKind);
+    }
+  }, [workspaceConfig, kindTouched]);
+
+  // Models settings (feature #11, §5.1): seed the new-session kind from the
+  // resolved Default model's harness when the dialog opens and neither the user
+  // nor a workspace config has already chosen a kind. Per-session overrides do
+  // NOT write back to settings. Best-effort; never blocks dialog use.
+  useEffect(() => {
+    if (!showDialog || kindTouched || workspaceConfig) return;
+    let cancelled = false;
+    fetch("/api/settings?scope=user")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const modelId: string | undefined = d?.resolved?.defaultModel?.modelId;
+        const harness = modelId?.includes(":") ? modelId.split(":")[0] : undefined;
+        if (!cancelled && harness && getHarness(harness)) {
+          setKind(harness as SessionKind);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [showDialog, kindTouched, workspaceConfig]);
 
   const live = sessions.filter((s) => s.attached).length;
   const idle = sessions.length - live;
@@ -221,6 +281,7 @@ export function DashboardView() {
       if (!nextGitInfo.isRepo) {
         setCreateWorktree(false);
         setWorktreeBranch("");
+        setSymlinkShared(false);
       }
     } catch (err) {
       setDirectoryError(err instanceof Error ? err.message : "Failed to list directories");
@@ -231,23 +292,47 @@ export function DashboardView() {
     }
   }, []);
 
-  const openDialog = useCallback(() => {
-    setName("");
-    setKind("bash");
-    setSkipPermissions(false);
-    setDirectoryPath(".");
-    setDirectoryRoot("");
-    setDirectoryInput(".");
-    setDirectoryEntries([]);
-    setDirectoryError(null);
-    setGitInfo({ isRepo: false });
-    setCreateWorktree(false);
-    setWorktreeBranch("");
-    setCreateError(null);
-    setShowDialog(true);
-    void loadDirectories(".");
-    setTimeout(() => inputRef.current?.focus(), 50);
-  }, [loadDirectories]);
+  const openDialog = useCallback(
+    // Multi-workspace (#12): the sidebar's workspace "+" opens this dialog
+    // pre-scoped to a repo dir (and pre-enables worktree creation) so a new
+    // worktree lands inside that workspace's project.
+    (scopeDirectory?: string) => {
+      const dir = scopeDirectory && scopeDirectory.trim() ? scopeDirectory.trim() : ".";
+      setName("");
+      setKind("bash");
+      setSkipPermissions(false);
+      setDirectoryPath(dir);
+      setDirectoryRoot("");
+      setDirectoryInput(dir);
+      setDirectoryEntries([]);
+      setDirectoryError(null);
+      setGitInfo({ isRepo: false });
+      setCreateWorktree(Boolean(scopeDirectory));
+      setWorktreeBranch("");
+      setSymlinkShared(false);
+      setSymlinkPaths("node_modules");
+      setCreateError(null);
+      setRunSetupOnCreate(true);
+      setKindTouched(false);
+      setShowDialog(true);
+      void loadDirectories(dir);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    },
+    [loadDirectories]
+  );
+
+  // Multi-project (#12): the project-header "+" navigates here with
+  // ?newWorkspace=<repoRoot>; open the new-workspace dialog scoped to that repo
+  // once, then strip the param so a refresh doesn't re-open it.
+  const newWorkspaceParam = searchParams?.get("newWorkspace");
+  useEffect(() => {
+    if (!newWorkspaceParam) return;
+    openDialog(newWorkspaceParam);
+    router.replace("/dashboard");
+    // openDialog is stable (memoized on loadDirectories); intentionally run on
+    // param change only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newWorkspaceParam]);
 
   useEffect(() => {
     if (showDialog && directoryPath === "." && directoryEntries.length === 0 && !directoryLoading) {
@@ -273,10 +358,23 @@ export function DashboardView() {
       return setCreateError("enter a valid branch name");
     }
     setCreateError(null);
+    const sharedPaths =
+      createWorktree && symlinkShared
+        ? symlinkPaths
+            .split(/[,\n]/)
+            .map((p) => p.trim())
+            .filter(Boolean)
+        : [];
     const session = await createSession(n, kind, {
-      dangerouslySkipPermissions: kind === "claude" ? skipPermissions : undefined,
+      dangerouslySkipPermissions: harnessSupportsSkipPermissions(kind)
+        ? skipPermissions
+        : undefined,
       cwd: directoryPath,
-      worktree: createWorktree ? { create: true, branch } : undefined,
+      worktree: createWorktree
+        ? { create: true, branch, symlinkPaths: symlinkShared ? sharedPaths : undefined }
+        : undefined,
+      // Only meaningful when a worktree + setup script exist; server enforces.
+      skipSetup: !runSetupOnCreate,
     });
     if (session) {
       setShowDialog(false);
@@ -290,9 +388,12 @@ export function DashboardView() {
     directoryError,
     createWorktree,
     worktreeBranch,
+    symlinkShared,
+    symlinkPaths,
     sessions,
     createSession,
     router,
+    runSetupOnCreate,
   ]);
 
   const copyAttachUrl = useCallback(() => {
@@ -315,7 +416,7 @@ export function DashboardView() {
 
         <div className="flex items-center gap-2 mt-5 mb-4">
           <button
-            onClick={openDialog}
+            onClick={() => openDialog()}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#002a17]
               border border-[#00cc6e] text-[#00ff88] text-[11px] hover:bg-[#00ff88]/10 transition-colors"
             style={{ boxShadow: "0 0 6px rgba(0, 255, 136, 0.35)" }}
@@ -350,7 +451,7 @@ export function DashboardView() {
           <div className="mt-10 p-10 text-center border border-dashed border-[#252933] rounded">
             <div className="text-[13px] text-[#a8b3a6]">no sessions. the box is lonely.</div>
             <button
-              onClick={openDialog}
+              onClick={() => openDialog()}
               className="mt-3 px-4 py-1.5 rounded bg-[#002a17] border border-[#00cc6e]
                 text-[#00ff88] text-[11px] hover:bg-[#00ff88]/10 transition-colors"
               style={{ boxShadow: "0 0 6px rgba(0, 255, 136, 0.35)" }}
@@ -400,7 +501,7 @@ export function DashboardView() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-[560px] max-w-[92vw] rounded bg-[#14161e] border border-[#363b47] p-4"
+            className="w-[560px] max-w-[92vw] max-h-[80vh] overflow-y-auto rounded bg-[#14161e] border border-[#363b47] p-4"
             style={{ boxShadow: "0 8px 24px rgba(0, 0, 0, 0.6)" }}
           >
             <div className="flex items-center justify-between mb-3">
@@ -419,7 +520,9 @@ export function DashboardView() {
               ref={inputRef}
               value={name}
               onChange={(e) => {
-                const nextName = e.target.value.replace(/[^A-Za-z0-9 ]/g, "");
+                // Allow the same characters the session API accepts (letters,
+                // numbers, space, and _ . -) so hyphenated names survive.
+                const nextName = e.target.value.replace(/[^A-Za-z0-9 _.-]/g, "");
                 setName(nextName);
                 if (createWorktree && (!worktreeBranch.trim() || worktreeBranch === "feature/")) {
                   setWorktreeBranch(defaultBranchName(slugify(nextName)));
@@ -449,29 +552,90 @@ export function DashboardView() {
               <span className="block text-[10px] uppercase tracking-wider text-[#6b7569] mb-1.5">
                 session kind
               </span>
-              <div className="flex rounded bg-[#07080c] border border-[#1a1d24] p-0.5">
-                {(
-                  [
-                    { value: "bash", label: "bash", color: "#00cc6e" },
-                    { value: "claude", label: "claude", color: "#d58fff" },
-                    { value: "codex", label: "codex", color: "#5ccfe6" },
-                  ] as const
-                ).map((k) => (
+              {/* Issue #4: registry-driven harness toggle (bash/claude/codex/cursor/opencode). */}
+              <div
+                data-testid="session-harness-toggle"
+                className="flex flex-wrap rounded bg-[#07080c] border border-[#1a1d24] p-0.5"
+              >
+                {listHarnesses().map((h) => (
                   <button
-                    key={k.value}
-                    onClick={() => setKind(k.value)}
-                    className={`flex-1 px-2 py-1 rounded text-[11px] transition-colors ${
-                      kind === k.value
+                    key={h.id}
+                    data-testid={`session-harness-${h.id}`}
+                    onClick={() => {
+                      // Issue #4: registry id is the session kind.
+                      setKind(h.id);
+                      // Feature #5: a manual pick wins over the repo default-kind.
+                      setKindTouched(true);
+                    }}
+                    className={`flex-1 inline-flex items-center justify-center gap-1 px-2 py-1 rounded text-[11px] transition-colors ${
+                      kind === h.id
                         ? "text-[#05060a] font-medium"
                         : "text-[#6b7569] hover:text-[#e6f0e4]"
                     }`}
-                    style={{ background: kind === k.value ? k.color : "transparent" }}
+                    style={{ background: kind === h.id ? h.color : "transparent" }}
                   >
-                    {k.label}
+                    {h.label}
+                    {h.badge === "NEW" && (
+                      <span
+                        className={`px-1 text-[8px] uppercase tracking-wider rounded leading-none ${
+                          kind === h.id
+                            ? "bg-[#05060a]/20 text-[#05060a]"
+                            : "bg-[#ffa657]/20 text-[#ffa657]"
+                        }`}
+                      >
+                        NEW
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
+              {workspaceConfig?.hasRepoConfig &&
+                workspaceConfig.provenance.defaultKind === "repo" && (
+                  <span className="mt-1 block text-[9px] text-[#6b7569]">
+                    default kind from repo settings.toml
+                  </span>
+                )}
             </div>
+
+            {/* Workspace config summary (feature #5) — only when a repo is selected. */}
+            {workspaceConfig && gitInfo.isRepo && (
+              <div
+                data-testid="workspace-config-summary"
+                className="mt-3 rounded border border-[#1a1d24] bg-[#07080c] px-2.5 py-2 text-[10px] text-[#a8b3a6] space-y-1.5"
+              >
+                <div className="flex items-center gap-1.5 text-[#6b7569]">
+                  <span className="uppercase tracking-wider">workspace</span>
+                  {workspaceConfig.hasRepoConfig ? (
+                    <span className="text-[#00ff88]">.terminalx/settings.toml</span>
+                  ) : (
+                    <span>defaults (no committed config)</span>
+                  )}
+                </div>
+                <div className="font-mono text-[#a8b3a6]">
+                  will copy: {workspaceConfig.copyFiles.join(" · ") || "—"} • inject TERMINALX_PORT
+                </div>
+                {workspaceConfig.setup && createWorktree && (
+                  <label className="flex items-center gap-2 text-[10px] text-[#a8b3a6]">
+                    <input
+                      type="checkbox"
+                      data-testid="new-session-run-setup"
+                      checked={runSetupOnCreate}
+                      onChange={(e) => setRunSetupOnCreate(e.target.checked)}
+                      className="accent-[#00ff88]"
+                    />
+                    run setup on create:{" "}
+                    <span className="font-mono text-[#e6f0e4] truncate">
+                      {workspaceConfig.setup.command}
+                    </span>
+                  </label>
+                )}
+                {workspaceConfig.scripts.length > 0 && (
+                  <div className="text-[#6b7569]" data-testid="workspace-summary-scripts">
+                    run scripts: {workspaceConfig.scripts.map((s) => s.name).join(" · ")}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="mt-3">
               <div className="flex items-center justify-between mb-1.5">
@@ -598,13 +762,67 @@ export function DashboardView() {
                     <p className="mt-1 text-[10px] text-[#6b7569] leading-tight">
                       starts from the selected repo HEAD and opens the new session in that worktree.
                     </p>
+
+                    <label className="mt-3 flex items-center gap-2 text-[11px] text-[#e6f0e4] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        data-testid="worktree-symlink-toggle"
+                        checked={symlinkShared}
+                        onChange={(e) => {
+                          setSymlinkShared(e.target.checked);
+                          setCreateError(null);
+                        }}
+                        className="accent-[#00cc6e] cursor-pointer"
+                      />
+                      symlink shared paths into the worktree
+                    </label>
+                    {symlinkShared && (
+                      <div className="mt-2">
+                        <label
+                          htmlFor="worktree-symlink-paths"
+                          className="block text-[10px] uppercase tracking-wider text-[#6b7569] mb-1.5"
+                        >
+                          shared paths
+                        </label>
+                        <input
+                          id="worktree-symlink-paths"
+                          data-testid="worktree-symlink-paths"
+                          value={symlinkPaths}
+                          onChange={(e) => {
+                            setSymlinkPaths(e.target.value);
+                            setCreateError(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleCreate();
+                            if (e.key === "Escape") setShowDialog(false);
+                          }}
+                          placeholder="node_modules, .next/cache"
+                          spellCheck={false}
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="off"
+                          className="w-full px-2 py-1.5 rounded bg-[#0f1117] border border-[#252933]
+                            text-[#e6f0e4] text-[12px] placeholder:text-[#6b7569]/50 font-mono
+                            focus:outline-none focus:border-[#00ff88] transition-colors"
+                        />
+                        <p className="mt-1 text-[10px] text-[#6b7569] leading-tight">
+                          comma-separated, repo-relative. heavy dirs like{" "}
+                          <code className="text-[#e6f0e4] bg-transparent border-0 px-0">
+                            node_modules
+                          </code>{" "}
+                          are linked to the shared copy instead of re-installed (copied if symlinks
+                          aren&apos;t supported).
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
             )}
 
-            {kind === "claude" && (
+            {harnessSupportsSkipPermissions(kind) && (
               <label
+                data-testid="session-skip-permissions"
                 className={`mt-3 flex items-start gap-2 px-2 py-1.5 rounded border cursor-pointer transition-colors ${
                   skipPermissions
                     ? "bg-[#ff5c5c]/10 border-[#ff5c5c]/50"

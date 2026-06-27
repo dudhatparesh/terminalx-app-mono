@@ -6,6 +6,17 @@ import { Bot, ExternalLink, Save, Shield } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { EngineToggle } from "@/components/terminal/EngineToggle";
 import { MobileSection } from "@/components/settings/MobileSection";
+// Issue #4: Harnesses settings surface (AI runtime tabs + OpenCode config).
+import { HarnessTabs } from "@/components/settings/HarnessTabs";
+// Workspace config (feature #5): User/Repo scope tabs + Edit settings.toml.
+import { WorkspaceSettings } from "@/components/settings/WorkspaceSettings";
+// GitHub integration (feature #7): connect repos, tokens, webhooks.
+import { GitHubSettings } from "@/components/settings/GitHubSettings";
+// Models & harness settings (feature #11): default/review model, effort,
+// personality, plan/fast/Chrome toggles, with User/Repo scope.
+import { SettingsScopeTabs } from "@/components/settings/SettingsScopeTabs";
+import { ModelsSettingsPage } from "@/components/settings/ModelsSettingsPage";
+import type { SettingsScope } from "@/lib/settings/types";
 import type { TelegramViewMode } from "@/hooks/useSessions";
 
 interface HealthInfo {
@@ -66,7 +77,48 @@ function Row({ label, value, mono }: { label: string; value: React.ReactNode; mo
   );
 }
 
-export function SettingsView() {
+// Feature #11: self-contained Models section embedded in the settings view.
+// Carries its own User/Repo scope tabs (the standalone SettingsShell offers the
+// fuller left-nav shell from §4.1, but the page is reachable here per the
+// mandate). `session` is optional — when absent the Repo tab is disabled.
+function ModelsSection({ session, isAdmin }: { session?: string; isAdmin: boolean }) {
+  const [scope, setScope] = useState<SettingsScope>("user");
+  const [repoAvailable, setRepoAvailable] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!session) {
+      setRepoAvailable(false);
+      return;
+    }
+    fetch(`/api/settings?scope=repo&session=${encodeURIComponent(session)}`)
+      .then((r) => {
+        if (!cancelled) setRepoAvailable(r.ok);
+      })
+      .catch(() => {
+        if (!cancelled) setRepoAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
+  useEffect(() => {
+    if (scope === "repo" && !repoAvailable) setScope("user");
+  }, [scope, repoAvailable]);
+
+  return (
+    <div data-testid="settings-models-section" className="mb-3">
+      <SettingsScopeTabs scope={scope} onScope={setScope} repoAvailable={repoAvailable} />
+      <ModelsSettingsPage scope={scope} session={session} readOnly={scope === "repo" && !isAdmin} />
+    </div>
+  );
+}
+
+export function SettingsView({
+  session,
+  hideModels = false,
+}: { session?: string; hideModels?: boolean } = {}) {
   const { user, authMode } = useAuth();
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [telegram, setTelegram] = useState<TelegramSettings | null>(null);
@@ -241,9 +293,27 @@ export function SettingsView() {
           )}
         </Section>
 
+        <GitHubSettings />
+
+        {/* Feature #11: Models & harness settings (default/review model, effort,
+            personality, plan/fast/Chrome toggles) with User/Repo scope. */}
+        {!hideModels && (
+          <Section title="models" desc="default + review model, effort, personality">
+            <ModelsSection session={session} isAdmin={user?.role === "admin"} />
+          </Section>
+        )}
+
         <Section title="terminal engine" desc="reloads new tabs">
           <EngineToggle />
         </Section>
+
+        {/* Issue #4: Harnesses — AI runtimes available to new sessions. */}
+        <Section title="harnesses" desc="AI runtimes available to new sessions">
+          <HarnessTabs />
+        </Section>
+
+        {/* Workspace config (feature #5) — its own card with User/Repo tabs. */}
+        <WorkspaceSettings />
 
         <Section title="mobile" desc="pair the terminalx mobile app">
           <MobileSection />

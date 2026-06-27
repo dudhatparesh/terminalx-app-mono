@@ -46,13 +46,20 @@ export function validateStartupConfiguration(
   const cwd = opts.cwd ?? process.cwd();
   const authMode = getAuthMode();
 
-  if (authMode === "none") {
+  // `none` mode disables auth entirely and is forbidden in normal operation.
+  // It can be explicitly opted into for local development and automated tests
+  // (e.g. Playwright) via TERMINALX_ALLOW_AUTH_NONE=true. In that mode the JWT
+  // secret is unused (middleware bypasses token verification), so it is not
+  // required either.
+  const allowAuthNone = process.env.TERMINALX_ALLOW_AUTH_NONE === "true";
+
+  if (authMode === "none" && !allowAuthNone) {
     errors.push(
       "TERMINALX_AUTH_MODE=none is not allowed. Configure local, password, or google auth."
     );
   }
 
-  if (!hasLongEnoughSecret(process.env.TERMINALX_JWT_SECRET)) {
+  if (authMode !== "none" && !hasLongEnoughSecret(process.env.TERMINALX_JWT_SECRET)) {
     errors.push(`TERMINALX_JWT_SECRET must be set and at least ${MIN_SECRET_LENGTH} characters.`);
   }
 

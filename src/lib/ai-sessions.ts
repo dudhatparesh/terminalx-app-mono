@@ -3,7 +3,10 @@ import * as path from "path";
 import { ensureSecureDir } from "./secure-dir";
 import { getSessionCreatedMs, isTerminalXMarkedSession, markTerminalXSession } from "./tmux";
 
-export type SessionKind = "bash" | "claude" | "codex";
+// Issue #4: SessionKind is now the OPEN id set sourced from the harness registry
+// (was the closed "bash" | "claude" | "codex" union). Existing ai-sessions.json
+// records stay valid since the legacy ids remain registry ids.
+export type SessionKind = string;
 
 export interface SessionMeta {
   name: string;
@@ -16,7 +19,48 @@ export interface SessionMeta {
     repoRoot: string;
     path: string;
     branch: string;
+    /** Absolute paths inside the worktree linked/copied from the shared source. */
+    linkedPaths?: string[];
   };
+
+  // --- Models settings (feature #11) — all optional → backward compatible.
+  // Resolved Models defaults seed the new-session dialog and are stored on the
+  // session so command generation can thread them once #4/#8 land. When the
+  // model registry is absent these are accepted + stored but only claude/codex
+  // invocations are emitted (graceful degradation, spec §5.2).
+  /** Provider-qualified model id, e.g. "claude:opus-4-8-1m". */
+  modelId?: string;
+  /** Reasoning/effort level for this session. */
+  effort?: string;
+  /** Codex personality preset (only meaningful for Codex models). */
+  personality?: string;
+  /** Started in plan mode. */
+  planMode?: boolean;
+  /** Started in fast mode. */
+  fastMode?: boolean;
+
+  // --- Workspace config (feature #5) — all optional → backward compatible.
+  // Old data/ai-sessions.json records without these fields remain valid.
+  /** Per-workspace injected port. Conductor analog: CONDUCTOR_PORT. */
+  port?: number;
+  /** Setup run lifecycle for this workspace. */
+  setup?: {
+    status: "pending" | "running" | "succeeded" | "failed" | "skipped";
+    startedAt?: string;
+    finishedAt?: string;
+    exitCode?: number;
+  };
+
+  // --- Worktree sidebar flags (feature #12, completed by #9) — optional.
+  // A worktree row can be collapsed (hidden from its workspace group) or
+  // archived. #12 wires the UI + a minimal archive endpoint; #9 builds the full
+  // archive/restore + cleanup system. Old records without these stay valid.
+  /** Worktree row is collapsed in the sidebar group. */
+  collapsed?: boolean;
+  /** Worktree has been archived (issue #9 completes restore/cleanup). */
+  archived?: boolean;
+  /** When the worktree was archived (ISO timestamp). */
+  archivedAt?: string;
 }
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -69,6 +113,27 @@ export async function saveMeta(meta: SessionMeta): Promise<void> {
   });
 }
 
+/**
+ * Shallow-merge a partial patch into an existing session's metadata (serialized,
+ * atomic). Returns the updated record, or undefined when no such session exists.
+ * Used by the worktree sidebar (feature #12) to flip collapsed/archived flags
+ * without rewriting the whole record. `name` is never patched.
+ */
+export async function patchMeta(
+  name: string,
+  patch: Partial<Omit<SessionMeta, "name">>
+): Promise<SessionMeta | undefined> {
+  return withLock(async () => {
+    const list = listMetadata();
+    const idx = list.findIndex((m) => m.name === name);
+    if (idx === -1) return undefined;
+    const updated = { ...list[idx], ...patch, name } as SessionMeta;
+    list[idx] = updated;
+    atomicWrite(list);
+    return updated;
+  });
+}
+
 export async function deleteMeta(name: string): Promise<void> {
   return withLock(async () => {
     const list = listMetadata();
@@ -107,35 +172,10 @@ export function ensureManagedSession(name: string): boolean {
   }
 }
 
-const CLI_BINS: Record<SessionKind, string | null> = {
-  bash: null,
-  claude: "claude",
-  codex: "codex",
-};
-
-export interface CommandOptions {
-  dangerouslySkipPermissions?: boolean;
-}
-
-/**
- * Wrap the CLI invocation so tmux's session stays alive even if the CLI
- * exits (e.g., not installed, signed out, crashed). On exit we drop to an
- * interactive bash so the user can inspect the error and retry.
- *
- * `dangerouslySkipPermissions` only applies to `claude` and appends
- * --dangerously-skip-permissions so the CLI doesn't prompt for approvals.
- */
-export function commandForKind(kind: SessionKind, opts: CommandOptions = {}): string | null {
-  const bin = CLI_BINS[kind];
-  if (!bin) return null;
-  const args: string[] = [];
-  if (kind === "claude" && opts.dangerouslySkipPermissions) {
-    args.push("--dangerously-skip-permissions");
-  }
-  const invocation = [bin, ...args].join(" ");
-  return `bash -lc '${invocation}; ec=$?; echo; echo "[${bin} exited with code $ec — dropping to bash]"; exec bash -l'`;
-}
-
-export function isValidKind(kind: unknown): kind is SessionKind {
-  return kind === "bash" || kind === "claude" || kind === "codex";
-}
+// Issue #4: CLI_BINS / commandForKind / isValidKind moved into the harness
+// registry (src/lib/harnesses/*). These re-export shims keep every existing
+// import (the sessions API, etc.) working unchanged; commandForKind emits the
+// SAME bash -lc wrapper as before and isValidKind now accepts any registry id.
+export type { CommandOptions } from "./harnesses/types";
+export { isValidHarnessId as isValidKind } from "./harnesses/registry";
+export { commandForHarness as commandForKind } from "./harnesses/command";

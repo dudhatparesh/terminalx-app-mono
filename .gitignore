@@ -46,3 +46,10 @@ next-env.d.ts
 /data/
 .revoked-tokens.json
 .gstack/
+
+# Conductor-parity feature testing sandbox (throwaway)
+.test-sandbox/
+
+# Playwright run artifacts
+playwright-report/
+test-results/
