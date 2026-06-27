@@ -114,6 +114,8 @@ test.describe("OpenCode provider catalog + per-provider config (issue #8)", () =
   test.beforeEach(async ({ page }) => {
     await stubProvidersApi(page);
     await page.goto("/settings");
+    // Settings is a left-nav shell: open the Harnesses page before asserting its content.
+    await page.getByTestId("settings-nav-harnesses").click();
     await expect(page.getByTestId("harness-tabs")).toBeVisible();
     await page.getByTestId("harness-tab-opencode").click();
     await expect(page.getByTestId("opencode-panel")).toBeVisible();
