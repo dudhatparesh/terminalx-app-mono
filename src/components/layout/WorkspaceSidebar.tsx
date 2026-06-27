@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Archive,
   ChevronDown,
   ChevronRight,
   GitBranch,
@@ -23,6 +24,7 @@ import {
   Loader2,
   MoreVertical,
   Plus,
+  RotateCcw,
   Trash2,
 } from "lucide-react";
 import { useWorkspaces } from "@/hooks/useWorkspaces";
@@ -33,7 +35,11 @@ function StatusIcon({ status }: { status: WorktreeStatus }) {
   const kind = statusIcon(status);
   if (kind === "spinner") {
     return (
-      <Loader2 size={13} className="shrink-0 animate-spin text-[#6b7569]" data-testid="wt-icon-loading" />
+      <Loader2
+        size={13}
+        className="shrink-0 animate-spin text-[#6b7569]"
+        data-testid="wt-icon-loading"
+      />
     );
   }
   if (kind === "pr-merged") {
@@ -195,7 +201,7 @@ function WorktreeRow({
               setMenuOpen(false);
             }}
           >
-            <Trash2 size={13} /> Archive
+            <Archive size={13} /> Archive
           </MenuItem>
         </Menu>
       </div>
@@ -300,10 +306,103 @@ function WorkspaceGroup({
   );
 }
 
+/** One archived worktree row with a Restore action (issue #9 Archived view). */
+function ArchivedRow({
+  worktree,
+  onRestore,
+}: {
+  worktree: WorktreeView;
+  onRestore: (sessionName: string) => void;
+}) {
+  return (
+    <div
+      data-testid="archived-worktree-row"
+      data-session={worktree.sessionName}
+      className="group flex h-8 w-full items-center gap-2 rounded px-2 text-[12px] text-[#6b7569] hover:bg-[#14161e]"
+    >
+      <Archive size={13} className="shrink-0 text-[#6b7569]" />
+      <span className="min-w-0 flex-1 truncate" data-testid="archived-worktree-name">
+        {worktree.branch}
+      </span>
+      <button
+        data-testid="archived-worktree-restore"
+        aria-label="restore worktree"
+        onClick={() => onRestore(worktree.sessionName)}
+        className="flex shrink-0 items-center gap-1 rounded border border-[#1a1d24] px-1.5 py-0.5 text-[10px] text-[#a8b3a6] opacity-0 transition-colors hover:bg-[#1a1d24] hover:text-[#e6f0e4] group-hover:opacity-100"
+      >
+        <RotateCcw size={11} /> Restore
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The "Archived" section: a collapsible list of every archived worktree across
+ * all workspaces, each with a Restore action (issue #9). Hidden entirely when
+ * nothing is archived so it never clutters the rail.
+ */
+function ArchivedSection({
+  workspaces,
+  onRestore,
+}: {
+  workspaces: WorkspaceView[];
+  onRestore: (sessionName: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const archived = workspaces.flatMap((ws) => ws.worktrees.filter((w) => w.archived));
+  if (archived.length === 0) return null;
+
+  return (
+    <div data-testid="archived-section" className="mt-3 border-t border-[#1a1d24] pt-2">
+      <button
+        data-testid="archived-toggle"
+        aria-label={expanded ? "collapse archived" : "expand archived"}
+        onClick={() => setExpanded((e) => !e)}
+        className="flex w-full items-center gap-1.5 rounded px-1 py-1.5 text-[12px] text-[#6b7569] hover:text-[#a8b3a6]"
+      >
+        {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <Archive size={12} />
+        <span className="font-medium">Archived</span>
+        <span
+          data-testid="archived-count"
+          className="ml-1 rounded-full bg-[#1a1d24] px-1.5 text-[10px] text-[#a8b3a6]"
+        >
+          {archived.length}
+        </span>
+      </button>
+      {expanded && (
+        <div className="mt-0.5 space-y-0.5 pl-3" data-testid="archived-list">
+          {archived.map((wt) => (
+            <ArchivedRow key={wt.sessionName} worktree={wt} onRestore={onRestore} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WorkspaceSidebar({ activeSession }: { activeSession: string | null }) {
   const router = useRouter();
-  const { workspaces, isLoading, deleteWorkspace, setWorktreeCollapsed, archiveWorktree } =
-    useWorkspaces();
+  const {
+    workspaces,
+    isLoading,
+    deleteWorkspace,
+    setWorktreeCollapsed,
+    archiveWorktree,
+    restoreWorktree,
+  } = useWorkspaces();
+
+  // The review-panel Archive button (ReviewStatusBar) dispatches this event for
+  // the CURRENT worktree; the sidebar owns the archive flow (#9), so it listens
+  // and archives that session through the same API path the "⋮ → Archive" uses.
+  useEffect(() => {
+    const onArchiveRequest = (e: Event) => {
+      const detail = (e as CustomEvent<{ sessionId?: string }>).detail;
+      if (detail?.sessionId) void archiveWorktree(detail.sessionId);
+    };
+    window.addEventListener("terminalx:archive-request", onArchiveRequest);
+    return () => window.removeEventListener("terminalx:archive-request", onArchiveRequest);
+  }, [archiveWorktree]);
 
   const openWorktree = (sessionName: string) => {
     router.push(`/workspace/${encodeURIComponent(sessionName)}`);
@@ -328,18 +427,24 @@ export function WorkspaceSidebar({ activeSession }: { activeSession: string | nu
           no workspaces yet
         </div>
       ) : (
-        workspaces.map((ws) => (
-          <WorkspaceGroup
-            key={ws.id}
-            workspace={ws}
-            activeSession={activeSession}
-            onOpenWorktree={openWorktree}
-            onAddWorktree={addWorktree}
-            onDelete={handleDelete}
-            onCollapseWorktree={(name, collapsed) => void setWorktreeCollapsed(name, collapsed)}
-            onArchiveWorktree={(name) => void archiveWorktree(name)}
+        <>
+          {workspaces.map((ws) => (
+            <WorkspaceGroup
+              key={ws.id}
+              workspace={ws}
+              activeSession={activeSession}
+              onOpenWorktree={openWorktree}
+              onAddWorktree={addWorktree}
+              onDelete={handleDelete}
+              onCollapseWorktree={(name, collapsed) => void setWorktreeCollapsed(name, collapsed)}
+              onArchiveWorktree={(name) => void archiveWorktree(name)}
+            />
+          ))}
+          <ArchivedSection
+            workspaces={workspaces}
+            onRestore={(name) => void restoreWorktree(name)}
           />
-        ))
+        </>
       )}
     </div>
   );

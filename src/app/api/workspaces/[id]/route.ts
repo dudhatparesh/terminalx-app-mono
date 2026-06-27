@@ -13,8 +13,10 @@ import { audit } from "@/lib/audit-log";
 import { deleteMeta, listMetadata } from "@/lib/ai-sessions";
 import { killSession } from "@/lib/tmux";
 import { removeGitWorktree } from "@/lib/git-worktree";
+import { deleteRecordingsForSession } from "@/lib/recordings-cleanup";
 import { deleteWorkspace, getWorkspace } from "@/lib/workspaces/store";
 import { sessionsForWorkspace } from "@/lib/workspaces/derive";
+import { pruneOrphanedWorktrees } from "@/lib/worktree-sweep";
 
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   if (process.env.TERMINUS_READ_ONLY === "true") {
@@ -51,17 +53,28 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
       }
       if (meta.worktree) {
         try {
-          removeGitWorktree(
-            meta.worktree.path,
-            meta.worktree.repoRoot,
-            meta.worktree.linkedPaths
-          );
+          removeGitWorktree(meta.worktree.path, meta.worktree.repoRoot, meta.worktree.linkedPaths);
         } catch {
           // Best-effort: a failed worktree removal must not block the rest.
         }
       }
+      // Confirmed delete: prune this worktree's recordings (issue #9). Archiving
+      // a worktree keeps recordings; deleting the whole workspace purges them.
+      try {
+        deleteRecordingsForSession(meta.name);
+      } catch {
+        // Best-effort: recording cleanup never blocks the workspace delete.
+      }
       await deleteMeta(meta.name);
       removedWorktrees++;
+    }
+
+    // Best-effort sweep: drop any orphaned worktree dirs whose sessions are gone
+    // (e.g. a worktree removed out-of-band) so the worktrees root stays clean.
+    try {
+      pruneOrphanedWorktrees();
+    } catch {
+      // Never block the delete on a sweep failure.
     }
 
     await deleteWorkspace(id);

@@ -37,6 +37,14 @@ export interface CreateGitWorktreeOptions {
   symlinkPaths?: string[];
 }
 
+export interface RestoredGitWorktree {
+  repoRoot: string;
+  worktreePath: string;
+  branch: string;
+  /** Absolute paths inside the restored worktree re-linked from the shared source. */
+  linkedPaths: string[];
+}
+
 function git(args: string[], timeout = GIT_TIMEOUT_MS): string {
   return execFileSync("git", args, {
     encoding: "utf-8",
@@ -74,6 +82,15 @@ function worktreesBaseDir(): string {
   assertNotSensitivePath(safeBase);
   fs.mkdirSync(safeBase, { recursive: true, mode: 0o700 });
   return safeBase;
+}
+
+/**
+ * The resolved + validated worktrees base directory (issue #9 sweep reuses this
+ * so orphan pruning is confined to the same root, validated against
+ * TERMINUS_ROOT and never a sensitive path). Creates the dir if missing.
+ */
+export function getWorktreesBaseDir(): string {
+  return worktreesBaseDir();
 }
 
 function branchExists(repoRoot: string, branch: string): boolean {
@@ -312,6 +329,75 @@ export function createGitWorktreeForSession(
     repoRoot: info.root,
     worktreePath,
     startDir,
+    branch,
+    linkedPaths,
+  };
+}
+
+/**
+ * Recreate a git worktree from a PRESERVED branch (issue #9 restore). Archive
+ * removes the on-disk worktree via removeGitWorktree but keeps the branch, so
+ * restore is `git worktree add <path> <branch>` on the existing ref, followed by
+ * re-linking the shared paths (#10) so a restored worktree behaves like a fresh
+ * one. The worktree path is validated against TERMINUS_ROOT and confined to the
+ * worktrees base dir; the branch must already exist (it must NOT be re-created).
+ */
+export function restoreGitWorktree(
+  worktreePath: string,
+  repoRoot: string,
+  rawBranch: unknown,
+  options: CreateGitWorktreeOptions = {}
+): RestoredGitWorktree {
+  // Validate the branch name BEFORE any filesystem work (throws on escapes).
+  const branch = validateGitBranchName(rawBranch);
+
+  const safeRepoRoot = resolveSafePath(repoRoot);
+  assertNotSensitivePath(safeRepoRoot);
+
+  // Confine the restore target to the worktrees base dir so a crafted path can't
+  // plant a worktree elsewhere in (or outside) the sandbox.
+  const safeWorktreePath = resolveSafePath(worktreePath);
+  assertNotSensitivePath(safeWorktreePath);
+  const baseDir = worktreesBaseDir();
+  const relToBase = path.relative(baseDir, safeWorktreePath);
+  if (relToBase.startsWith("..") || path.isAbsolute(relToBase) || relToBase === "") {
+    throw new Error("Worktree path is outside the worktrees directory");
+  }
+
+  if (!branchExists(safeRepoRoot, branch)) {
+    throw new Error("Preserved branch no longer exists — cannot restore");
+  }
+
+  if (fs.existsSync(safeWorktreePath)) {
+    throw new Error("Worktree path already exists");
+  }
+
+  // Resolve + validate share paths BEFORE the worktree exists so an invalid
+  // (escaping / sensitive) target aborts without leaving a stray worktree behind.
+  const relSymlinkPaths = resolveSymlinkPaths(options.symlinkPaths);
+  for (const relPath of relSymlinkPaths) {
+    resolveShareTarget(safeRepoRoot, safeWorktreePath, relPath);
+  }
+
+  try {
+    // No -b: attach the EXISTING preserved branch to the recreated worktree.
+    git(["-C", safeRepoRoot, "worktree", "add", safeWorktreePath, branch], GIT_WORKTREE_TIMEOUT_MS);
+  } catch (err) {
+    throw new Error(`Failed to restore Git worktree: ${gitErrorMessage(err)}`);
+  }
+
+  let linkedPaths: string[] = [];
+  try {
+    linkedPaths = linkSharedPaths(safeRepoRoot, safeWorktreePath, relSymlinkPaths);
+  } catch (err) {
+    // Re-linking must never leave a half-built worktree: tear it down + surface.
+    removeGitWorktree(safeWorktreePath, safeRepoRoot);
+    throw err;
+  }
+
+  return {
+    repoRoot: safeRepoRoot,
+    worktreePath: safeWorktreePath,
     branch,
     linkedPaths,
   };
