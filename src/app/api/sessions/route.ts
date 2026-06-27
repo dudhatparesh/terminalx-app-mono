@@ -14,7 +14,12 @@ import {
 } from "@/lib/ai-sessions";
 // Issue #4: validation message is now sourced from the harness registry so new
 // harnesses (cursor/opencode) need no edit here.
-import { listHarnesses } from "@/lib/harnesses/registry";
+import { listHarnesses, getHarness } from "@/lib/harnesses/registry";
+// Issue #11: resolve the effective Models settings for a new session and thread
+// the chosen model + plan mode into the harness command (data-driven via the
+// registry's modelFlag/planModeFlag — no per-CLI hard-coding here).
+import { resolveSessionModelSettings } from "@/lib/settings/session-settings";
+import { modelOptionsForKind } from "@/lib/harnesses/session-model";
 import { listTopics } from "@/lib/telegram/state";
 import { botIsConfigured, type BotIdentity } from "@/lib/telegram/auth";
 import { ensureTopicForSession } from "@/lib/telegram/bot";
@@ -169,10 +174,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const baseCommand = commandForKind(sessionKind, {
-      dangerouslySkipPermissions: Boolean(dangerouslySkipPermissions),
-    });
-
     let startDir: string;
     let createdWorktree:
       | {
@@ -229,6 +230,29 @@ export async function POST(req: NextRequest) {
       // Copy `.env`/`.env.local` "if you have one" into the new worktree.
       copyConfiguredFiles(sourceCheckout, createdWorktree.worktreePath, wsConfig.copyFiles);
     }
+
+    // --- Models settings (feature #11) -------------------------------------
+    // Resolve the effective Models settings for this repo (registry default <
+    // user < repo) and thread the chosen model + plan mode into the harness
+    // command. modelOptionsForKind drops the model when its harness prefix does
+    // not match the session kind, so a Codex default never reaches `claude`.
+    // Existing behavior is preserved: with no model set (or a non-matching
+    // harness) commandForKind emits the byte-identical legacy command.
+    const sessionModel = resolveSessionModelSettings(wsRepoRoot);
+    const modelOpts = modelOptionsForKind(sessionKind, {
+      // Only pass an explicit model: a bare registry default lets the CLI pick
+      // its own default so vanilla sessions keep the legacy command unchanged.
+      modelId: sessionModel.modelExplicit ? sessionModel.modelId : undefined,
+      planMode: sessionModel.planMode,
+    });
+    const baseCommand = commandForKind(sessionKind, {
+      dangerouslySkipPermissions: Boolean(dangerouslySkipPermissions),
+      ...modelOpts,
+    });
+    // Persist the resolved Models settings only for harnesses that drive a model
+    // (those with a binary). bash has no model so its records stay legacy-clean.
+    const persistModelMeta = getHarness(sessionKind)?.command.bin != null;
+
     const wsEnv = { TERMINALX_PORT: String(port), ...wsConfig.env };
     const command = baseCommand
       ? withWorkspaceEnv(baseCommand, wsEnv)
@@ -263,6 +287,19 @@ export async function POST(req: NextRequest) {
         : undefined,
       port,
       setup: wsConfig.setup ? { status: willRunSetup ? "pending" : "skipped" } : undefined,
+      // Feature #11: persist the resolved Models settings on the AI session so
+      // the UI can show what launched + a later relaunch is reproducible. Only
+      // recorded for model-bearing harnesses (bash has no model) — keeps legacy
+      // bash records byte-identical.
+      ...(persistModelMeta
+        ? {
+            modelId: sessionModel.modelId,
+            effort: sessionModel.effort,
+            personality: sessionModel.personality,
+            planMode: sessionModel.planMode,
+            fastMode: sessionModel.fastMode,
+          }
+        : {}),
     });
 
     // Fire-and-stream the setup run (async). Status is polled via GET /api/sessions.
