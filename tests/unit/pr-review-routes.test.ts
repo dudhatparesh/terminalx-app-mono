@@ -11,6 +11,11 @@ vi.mock("@/lib/ai-sessions", () => ({
 vi.mock("@/lib/pr-review/repo-binding", () => ({
   resolveRepoBinding: vi.fn(async () => null),
   getGitHubApiForRepo: vi.fn(),
+  // Mirror the real helper: a worktree-backed session yields its repo+branch;
+  // a session without a worktree (and no resolvable cwd git repo here) yields null.
+  resolveSessionRepo: vi.fn((meta?: { worktree?: { repoRoot: string; branch: string } }) =>
+    meta?.worktree ? { repoRoot: meta.worktree.repoRoot, headBranch: meta.worktree.branch } : null
+  ),
 }));
 
 import { getMeta } from "@/lib/ai-sessions";
@@ -125,13 +130,13 @@ describe("PR-review routes — admin/local pass-through behavior", () => {
     delete process.env.TERMINALX_AUTH_MODE;
   });
 
-  it("GET /review 404s a session with no worktree", async () => {
+  it("GET /review 404s a session with no git repository", async () => {
     getMetaMock.mockReturnValue({ name: "alice-feature", kind: "bash", createdAt: "" });
     const { GET } = await import("@/app/api/sessions/[name]/review/route");
     const { req, ctx } = makeReq();
     const res = await GET(req as never, ctx);
     expect(res.status).toBe(404);
-    expect((await res.json()).error).toBe("Session has no worktree");
+    expect((await res.json()).error).toBe("Session has no git repository");
   });
 
   it("GET /review returns the unbound Create-PR payload when the repo isn't bound", async () => {
@@ -167,28 +172,47 @@ describe("PR-review routes — admin/local pass-through behavior", () => {
     expect((await res.json()).error).toMatch(/title/i);
   });
 
-  it("PUT /review/drafts/[id] rejects a draft with no body", async () => {
-    const { PUT } = await import("@/app/api/sessions/[name]/review/drafts/[id]/route");
+  it("PUT /review/drafts/[...id] rejects a draft with no body", async () => {
+    const { PUT } = await import("@/app/api/sessions/[name]/review/drafts/[...id]/route");
     const req = {
       headers: { get: () => null },
       json: async () => ({ path: "a.ts", line: 3, body: "  " }),
     } as never;
-    const ctx = { params: Promise.resolve({ name: "alice-feature", id: "d1" }) };
+    const ctx = { params: Promise.resolve({ name: "alice-feature", id: ["d1"] }) };
     const res = await PUT(req, ctx);
     expect(res.status).toBe(400);
   });
 
-  it("PUT /review/drafts/[id] persists a valid draft", async () => {
-    const { PUT } = await import("@/app/api/sessions/[name]/review/drafts/[id]/route");
+  it("PUT /review/drafts/[...id] persists a valid draft", async () => {
+    const { PUT } = await import("@/app/api/sessions/[name]/review/drafts/[...id]/route");
     const req = {
       headers: { get: () => null },
       json: async () => ({ path: "a.ts", line: 3, side: "RIGHT", body: "fix this" }),
     } as never;
-    const ctx = { params: Promise.resolve({ name: "alice-feature", id: "d1" }) };
+    const ctx = { params: Promise.resolve({ name: "alice-feature", id: ["d1"] }) };
     const res = await PUT(req, ctx);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.id).toBe("d1");
     expect(body.body).toBe("fix this");
+  });
+
+  it("PUT /review/drafts/[...id] reassembles an id containing slashes", async () => {
+    const { PUT } = await import("@/app/api/sessions/[name]/review/drafts/[...id]/route");
+    const req = {
+      headers: { get: () => null },
+      json: async () => ({ path: "src/index.ts", line: 3, side: "RIGHT", body: "guard here" }),
+    } as never;
+    // A real draft id embeds the file path, e.g. draft:<session>:src/index.ts:3:n.
+    const ctx = {
+      params: Promise.resolve({
+        name: "alice-feature",
+        id: ["draft:alice-feature:src", "index.ts:3:n"],
+      }),
+    };
+    const res = await PUT(req, ctx);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.id).toBe("draft:alice-feature:src/index.ts:3:n");
   });
 });

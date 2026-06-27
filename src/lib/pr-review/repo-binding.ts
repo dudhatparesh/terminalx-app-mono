@@ -15,6 +15,7 @@ import { GitHubAPI } from "../github/api";
 import { listRepositoryRecords } from "../github/store";
 import { tokenVault } from "../github/token-vault";
 import { getGitDirectoryInfo } from "../git-worktree";
+import type { SessionMeta } from "../ai-sessions";
 
 export interface RepoBinding {
   owner: string;
@@ -73,6 +74,30 @@ export async function resolveRepoBinding(repoRoot: string): Promise<RepoBinding 
     integrationId: record.integrationId,
     defaultBranch: record.defaultBranch || info.branch || "main",
   };
+}
+
+/**
+ * Resolve the git repo backing a session for the PR-review surface (spec §6.1).
+ *
+ * A session created with a Git worktree carries the repo root + branch in its
+ * meta. A session merely *rooted* at a checkout (no worktree created) carries
+ * only its `cwd`; we still derive the repo root + current branch from that
+ * directory so the Review tab can render inline ("Connect this repo" / Create-PR)
+ * instead of 404-ing. Returns null when the session has no git checkout at all.
+ */
+export function resolveSessionRepo(
+  meta: SessionMeta | undefined
+): { repoRoot: string; headBranch: string } | null {
+  if (meta?.worktree) {
+    return { repoRoot: meta.worktree.repoRoot, headBranch: meta.worktree.branch };
+  }
+  if (meta?.cwd) {
+    const info = getGitDirectoryInfo(meta.cwd);
+    if (info.isRepo && info.root) {
+      return { repoRoot: info.root, headBranch: info.branch ?? "" };
+    }
+  }
+  return null;
 }
 
 /**

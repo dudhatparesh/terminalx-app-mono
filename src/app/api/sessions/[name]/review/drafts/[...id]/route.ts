@@ -1,20 +1,30 @@
-// PUT  /api/sessions/[name]/review/drafts/[id] — upsert a draft comment/reply.
-// DELETE /api/sessions/[name]/review/drafts/[id] — discard a draft.
+// PUT  /api/sessions/[name]/review/drafts/[...id] — upsert a draft comment/reply.
+// DELETE /api/sessions/[name]/review/drafts/[...id] — discard a draft.
 // Server-persisted, no GitHub call (spec §6.2). Session-scoped (403, never 401).
+//
+// The draft id is itself a `:`-delimited string that embeds the file path
+// (e.g. `draft:<session>:src/index.ts:3:<nonce>`), so it can legitimately contain
+// `/`. A catch-all (`[...id]`) segment captures those slashes; we re-join + decode
+// the parts back into the opaque id the draft store keys on.
 import { NextRequest, NextResponse } from "next/server";
 import { discardDraft, upsertDraft } from "@/lib/pr-review/drafts";
 import { guardSessionRoute } from "@/lib/pr-review/route-guard";
 import type { DraftComment } from "@/types/pr-review";
 
 interface Ctx {
-  params: Promise<{ name: string; id: string }>;
+  params: Promise<{ name: string; id: string[] }>;
+}
+
+/** Rebuild the original draft id from the catch-all segments. */
+function joinId(parts: string[]): string {
+  return parts.map((p) => decodeURIComponent(p)).join("/");
 }
 
 export async function PUT(req: NextRequest, ctx: Ctx) {
-  const { name: rawName, id: rawId } = await ctx.params;
+  const { name: rawName, id: idParts } = await ctx.params;
   const guard = guardSessionRoute(req.headers, rawName);
   if (!guard.ok) return guard.response;
-  const id = decodeURIComponent(rawId);
+  const id = joinId(idParts);
 
   let body: Partial<DraftComment>;
   try {
@@ -51,9 +61,9 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
 }
 
 export async function DELETE(req: NextRequest, ctx: Ctx) {
-  const { name: rawName, id: rawId } = await ctx.params;
+  const { name: rawName, id: idParts } = await ctx.params;
   const guard = guardSessionRoute(req.headers, rawName);
   if (!guard.ok) return guard.response;
-  const removed = await discardDraft(guard.name, decodeURIComponent(rawId));
+  const removed = await discardDraft(guard.name, joinId(idParts));
   return NextResponse.json({ success: true, removed });
 }

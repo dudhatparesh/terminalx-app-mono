@@ -69,8 +69,8 @@ export function ProviderConfigForm({
         </p>
       ) : (
         <p className="text-[10px] text-[#6b7569] leading-tight">
-          Authentication is handled by OpenCode (its own login / <code>.env</code>). TerminalX
-          stores no API key here.
+          Authentication is handled by OpenCode (its own login / <code>.env</code>). No credentials
+          are stored here.
         </p>
       )}
 

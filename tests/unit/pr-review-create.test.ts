@@ -7,6 +7,10 @@ vi.mock("@/lib/ai-sessions", () => ({ getMeta: vi.fn() }));
 vi.mock("@/lib/pr-review/repo-binding", () => ({
   resolveRepoBinding: vi.fn(),
   getGitHubApiForRepo: vi.fn(),
+  // Mirror the real helper: a worktree-backed session yields its repo+branch.
+  resolveSessionRepo: vi.fn((meta?: { worktree?: { repoRoot: string; branch: string } }) =>
+    meta?.worktree ? { repoRoot: meta.worktree.repoRoot, headBranch: meta.worktree.branch } : null
+  ),
 }));
 
 import { getMeta } from "@/lib/ai-sessions";

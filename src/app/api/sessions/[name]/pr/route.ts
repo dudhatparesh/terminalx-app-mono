@@ -8,7 +8,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getMeta } from "@/lib/ai-sessions";
 import { validateGitBranchName } from "@/lib/git-worktree";
 import { toPullRequestView } from "@/lib/github/derive";
-import { getGitHubApiForRepo, resolveRepoBinding } from "@/lib/pr-review/repo-binding";
+import {
+  getGitHubApiForRepo,
+  resolveRepoBinding,
+  resolveSessionRepo,
+} from "@/lib/pr-review/repo-binding";
 import { sanitizeGitHubError } from "@/lib/pr-review/error";
 import { guardSessionRoute } from "@/lib/pr-review/route-guard";
 
@@ -28,9 +32,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
   const { name } = guard;
 
   const meta = getMeta(name);
-  if (!meta?.worktree) {
-    return NextResponse.json({ error: "Session has no worktree" }, { status: 404 });
-  }
+  const repo = resolveSessionRepo(meta);
 
   let body: CreatePrBody;
   try {
@@ -50,8 +52,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
     );
   }
 
-  // head defaults to (and is fixed to) the session's worktree branch.
-  const headRaw = body.head?.trim() || meta.worktree.branch;
+  // head defaults to (and is fixed to) the session's branch when known.
+  const headRaw = body.head?.trim() || repo?.headBranch || "";
   const baseRaw = body.base?.trim() ?? "";
   let head: string;
   let base: string;
@@ -64,11 +66,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
       { status: 400 }
     );
   }
+  // Reject head === base BEFORE any worktree/binding/network work (spec §5).
   if (head === base) {
     return NextResponse.json({ error: "Head and base branches must differ" }, { status: 400 });
   }
 
-  const binding = await resolveRepoBinding(meta.worktree.repoRoot);
+  // The repo binding is only needed for the actual network create hop —
+  // validation above runs offline regardless.
+  if (!repo) {
+    return NextResponse.json({ error: "Session has no git repository" }, { status: 404 });
+  }
+
+  const binding = await resolveRepoBinding(repo.repoRoot);
   if (!binding) {
     return NextResponse.json(
       { error: "This repo isn't connected to a GitHub integration" },
