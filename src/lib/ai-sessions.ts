@@ -23,6 +23,22 @@ export interface SessionMeta {
     linkedPaths?: string[];
   };
 
+  // --- Models settings (feature #11) — all optional → backward compatible.
+  // Resolved Models defaults seed the new-session dialog and are stored on the
+  // session so command generation can thread them once #4/#8 land. When the
+  // model registry is absent these are accepted + stored but only claude/codex
+  // invocations are emitted (graceful degradation, spec §5.2).
+  /** Provider-qualified model id, e.g. "claude:opus-4-8-1m". */
+  modelId?: string;
+  /** Reasoning/effort level for this session. */
+  effort?: string;
+  /** Codex personality preset (only meaningful for Codex models). */
+  personality?: string;
+  /** Started in plan mode. */
+  planMode?: boolean;
+  /** Started in fast mode. */
+  fastMode?: boolean;
+
   // --- Workspace config (feature #5) — all optional → backward compatible.
   // Old data/ai-sessions.json records without these fields remain valid.
   /** Per-workspace injected port. Conductor analog: CONDUCTOR_PORT. */

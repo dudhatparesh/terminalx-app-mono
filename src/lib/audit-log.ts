@@ -34,7 +34,9 @@ export type AuditEvent =
   // Workspace config (feature #5):
   | "workspace_config_edited"
   | "workspace_script_run"
-  | "workspace_setup_run";
+  | "workspace_setup_run"
+  // Models & harness settings (feature #11): repo-scope settings write.
+  | "settings_repo_updated";
 
 interface AuditEntry {
   timestamp: string;

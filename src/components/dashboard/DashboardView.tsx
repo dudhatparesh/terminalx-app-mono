@@ -236,6 +236,28 @@ export function DashboardView() {
     }
   }, [workspaceConfig, kindTouched]);
 
+  // Models settings (feature #11, §5.1): seed the new-session kind from the
+  // resolved Default model's harness when the dialog opens and neither the user
+  // nor a workspace config has already chosen a kind. Per-session overrides do
+  // NOT write back to settings. Best-effort; never blocks dialog use.
+  useEffect(() => {
+    if (!showDialog || kindTouched || workspaceConfig) return;
+    let cancelled = false;
+    fetch("/api/settings?scope=user")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const modelId: string | undefined = d?.resolved?.defaultModel?.modelId;
+        const harness = modelId?.includes(":") ? modelId.split(":")[0] : undefined;
+        if (!cancelled && harness && getHarness(harness)) {
+          setKind(harness as SessionKind);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [showDialog, kindTouched, workspaceConfig]);
+
   const live = sessions.filter((s) => s.attached).length;
   const idle = sessions.length - live;
   const preview = slugify(name);
