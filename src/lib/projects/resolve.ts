@@ -1,4 +1,4 @@
-// Server-side resolution of a worktree's diff stat + PR status (issue #12).
+// Server-side resolution of a workspace's diff stat + PR status (issue #12).
 //
 // SERVER-ONLY: shells out to git (git-diff numstat) and talks to the GitHub
 // layer (#7) for PR status. Everything is BEST-EFFORT — a failure to resolve a
@@ -10,15 +10,15 @@ import { computeDiff, resolveBase } from "@/lib/git-diff";
 import { resolvePRForSession } from "@/lib/github/session-link";
 import { getGitHubApiForRepo, resolveRepoBinding } from "@/lib/pr-review/repo-binding";
 import type { SessionMeta } from "@/lib/ai-sessions";
-import type { WorktreeResolved } from "./derive";
-import type { DiffStat } from "@/types/workspace";
+import type { WorkspaceResolved } from "./derive";
+import type { DiffStat } from "@/types/project";
 
 /**
- * Compute the additions/deletions of a worktree branch vs the workspace base,
+ * Compute the additions/deletions of a workspace branch vs the project base,
  * reusing the same numstat the Changes tab uses so the two agree. Returns a
  * zero stat when the worktree path isn't a usable checkout or the diff fails.
  */
-export function computeWorktreeDiffStat(meta: SessionMeta): DiffStat {
+export function computeWorkspaceDiffStat(meta: SessionMeta): DiffStat {
   const wt = meta.worktree;
   if (!wt) return { additions: 0, deletions: 0 };
   try {
@@ -38,12 +38,12 @@ export function computeWorktreeDiffStat(meta: SessionMeta): DiffStat {
 }
 
 /**
- * Best-effort PR status for a worktree branch via the GitHub layer (#7). When
+ * Best-effort PR status for a workspace branch via the GitHub layer (#7). When
  * the repo isn't bound to an integration, or the lookup fails, returns {} so the
  * row stays "in-progress". Never throws.
  */
-export async function resolveWorktreePR(meta: SessionMeta): Promise<{
-  prStatus?: WorktreeResolved["prStatus"];
+export async function resolveWorkspacePR(meta: SessionMeta): Promise<{
+  prStatus?: WorkspaceResolved["prStatus"];
   prNumber?: number;
 }> {
   const wt = meta.worktree;
@@ -61,12 +61,12 @@ export async function resolveWorktreePR(meta: SessionMeta): Promise<{
 }
 
 /**
- * Resolve the full per-worktree data (diff stat + PR status) for one session.
- * Synchronous diff + async PR; both best-effort. Used by GET /api/workspaces.
+ * Resolve the full per-workspace data (diff stat + PR status) for one session.
+ * Synchronous diff + async PR; both best-effort. Used by GET /api/projects.
  */
-export async function resolveWorktree(meta: SessionMeta): Promise<WorktreeResolved> {
-  const diffStat = computeWorktreeDiffStat(meta);
-  const { prStatus, prNumber } = await resolveWorktreePR(meta);
+export async function resolveWorkspace(meta: SessionMeta): Promise<WorkspaceResolved> {
+  const diffStat = computeWorkspaceDiffStat(meta);
+  const { prStatus, prNumber } = await resolveWorkspacePR(meta);
   return {
     diffStat,
     ...(prStatus ? { prStatus } : {}),

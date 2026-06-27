@@ -1,46 +1,46 @@
 import { describe, it, expect } from "vitest";
 import {
-  deriveWorktreeStatus,
-  toWorktreeView,
-  sessionsForWorkspace,
+  deriveWorkspaceStatus,
   toWorkspaceView,
-  defaultWorkspaceName,
-  type WorktreeSessionLike,
-} from "@/lib/workspaces/derive";
-import { statusIcon, formatDiffStat } from "@/types/workspace";
-import type { Workspace } from "@/types/workspace";
+  sessionsForProject,
+  toProjectView,
+  defaultProjectName,
+  type WorkspaceSessionLike,
+} from "@/lib/projects/derive";
+import { statusIcon, formatDiffStat } from "@/types/project";
+import type { Project } from "@/types/project";
 
-function session(name: string, repoRoot: string, branch: string): WorktreeSessionLike {
+function session(name: string, repoRoot: string, branch: string): WorkspaceSessionLike {
   return { name, worktree: { repoRoot, path: `/wt/${name}`, branch } };
 }
 
-describe("deriveWorktreeStatus (corrected model)", () => {
+describe("deriveWorkspaceStatus (corrected model)", () => {
   it("is loading until a diff stat resolves", () => {
-    expect(deriveWorktreeStatus({})).toBe("loading");
-    expect(deriveWorktreeStatus({ loading: true, diffStat: { additions: 1, deletions: 0 } })).toBe(
+    expect(deriveWorkspaceStatus({})).toBe("loading");
+    expect(deriveWorkspaceStatus({ loading: true, diffStat: { additions: 1, deletions: 0 } })).toBe(
       "loading"
     );
   });
 
   it("a merged PR yields merged (purple icon)", () => {
     expect(
-      deriveWorktreeStatus({ diffStat: { additions: 5, deletions: 1 }, prStatus: "merged" })
+      deriveWorkspaceStatus({ diffStat: { additions: 5, deletions: 1 }, prStatus: "merged" })
     ).toBe("merged");
   });
 
   it("an open/draft PR yields open", () => {
     expect(
-      deriveWorktreeStatus({ diffStat: { additions: 5, deletions: 1 }, prStatus: "open" })
+      deriveWorkspaceStatus({ diffStat: { additions: 5, deletions: 1 }, prStatus: "open" })
     ).toBe("open");
     expect(
-      deriveWorktreeStatus({ diffStat: { additions: 5, deletions: 1 }, prStatus: "draft" })
+      deriveWorkspaceStatus({ diffStat: { additions: 5, deletions: 1 }, prStatus: "draft" })
     ).toBe("open");
   });
 
   it("no PR (or a closed one) falls back to in-progress (branch icon)", () => {
-    expect(deriveWorktreeStatus({ diffStat: { additions: 0, deletions: 0 } })).toBe("in-progress");
+    expect(deriveWorkspaceStatus({ diffStat: { additions: 0, deletions: 0 } })).toBe("in-progress");
     expect(
-      deriveWorktreeStatus({ diffStat: { additions: 1, deletions: 1 }, prStatus: "closed" })
+      deriveWorkspaceStatus({ diffStat: { additions: 1, deletions: 1 }, prStatus: "closed" })
     ).toBe("in-progress");
   });
 });
@@ -63,9 +63,9 @@ describe("formatDiffStat", () => {
   });
 });
 
-describe("toWorktreeView", () => {
+describe("toWorkspaceView", () => {
   it("projects a session + resolved data, branch is the display name", () => {
-    const view = toWorktreeView(session("s1", "/repo", "feat/x"), {
+    const view = toWorkspaceView(session("s1", "/repo", "feat/x"), {
       diffStat: { additions: 3, deletions: 2 },
       prStatus: "merged",
       prNumber: 42,
@@ -81,48 +81,48 @@ describe("toWorktreeView", () => {
   });
 
   it("carries collapsed/archived flags through", () => {
-    const s: WorktreeSessionLike = { ...session("s2", "/repo", "feat/y"), collapsed: true };
-    const view = toWorktreeView(s, { diffStat: { additions: 0, deletions: 0 } });
+    const s: WorkspaceSessionLike = { ...session("s2", "/repo", "feat/y"), collapsed: true };
+    const view = toWorkspaceView(s, { diffStat: { additions: 0, deletions: 0 } });
     expect(view.collapsed).toBe(true);
   });
 });
 
-describe("sessionsForWorkspace", () => {
+describe("sessionsForProject", () => {
   it("groups only sessions whose worktree.repoRoot matches", () => {
     const sessions = [
       session("a", "/repoA", "b1"),
       session("b", "/repoB", "b2"),
       session("c", "/repoA", "b3"),
-      { name: "no-wt" } as WorktreeSessionLike, // no worktree → excluded
+      { name: "no-wt" } as WorkspaceSessionLike, // no worktree → excluded
     ];
-    const ws: Pick<Workspace, "repoRoot"> = { repoRoot: "/repoA" };
-    const out = sessionsForWorkspace(ws, sessions);
+    const proj: Pick<Project, "repoRoot"> = { repoRoot: "/repoA" };
+    const out = sessionsForProject(proj, sessions);
     expect(out.map((s) => s.name)).toEqual(["a", "c"]);
   });
 });
 
-describe("toWorkspaceView", () => {
-  it("attaches worktrees under the workspace", () => {
-    const ws: Workspace = {
+describe("toProjectView", () => {
+  it("attaches workspaces under the project", () => {
+    const proj: Project = {
       id: "1",
       repoRoot: "/repoA",
       name: "repoA",
       createdAt: new Date().toISOString(),
     };
-    const wt = toWorktreeView(session("a", "/repoA", "b1"), {
+    const ws = toWorkspaceView(session("a", "/repoA", "b1"), {
       diffStat: { additions: 1, deletions: 0 },
     });
-    const view = toWorkspaceView(ws, [wt]);
+    const view = toProjectView(proj, [ws]);
     expect(view.id).toBe("1");
-    expect(view.worktrees).toHaveLength(1);
-    expect(view.worktrees[0]?.sessionName).toBe("a");
+    expect(view.workspaces).toHaveLength(1);
+    expect(view.workspaces[0]?.sessionName).toBe("a");
   });
 });
 
-describe("defaultWorkspaceName", () => {
+describe("defaultProjectName", () => {
   it("uses the repo directory basename", () => {
-    expect(defaultWorkspaceName("/Users/me/code/terminalx-app-mono")).toBe("terminalx-app-mono");
-    expect(defaultWorkspaceName("/Users/me/code/terminalx-app-mono/")).toBe("terminalx-app-mono");
-    expect(defaultWorkspaceName("repo")).toBe("repo");
+    expect(defaultProjectName("/Users/me/code/terminalx-app-mono")).toBe("terminalx-app-mono");
+    expect(defaultProjectName("/Users/me/code/terminalx-app-mono/")).toBe("terminalx-app-mono");
+    expect(defaultProjectName("repo")).toBe("repo");
   });
 });
