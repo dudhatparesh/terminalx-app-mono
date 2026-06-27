@@ -39,6 +39,16 @@ export function commandForHarness(id: string, opts: CommandOptions = {}): string
     if (opts[when]) args.push(flag);
   }
 
+  // Issue #11: thread the chosen model + plan mode in, data-driven via the
+  // harness descriptor. A model only lands when the harness declares a modelFlag
+  // (bash/cursor have none → command stays byte-identical to before).
+  if (h.command.planModeFlag && opts.planMode) {
+    args.push(h.command.planModeFlag);
+  }
+  if (h.command.modelFlag && opts.model && opts.model.trim()) {
+    args.push(h.command.modelFlag, opts.model.trim());
+  }
+
   const invocation = [bin, ...args].join(" ");
   // Identical fallback-to-bash wrapper as the old commandForKind (keeps the
   // tmux session alive so the user can inspect the error and retry).
