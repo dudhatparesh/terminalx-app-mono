@@ -57,6 +57,41 @@ describe("upsertOpenCodeProviderToml", () => {
     expect(s.opencodeProviders).toEqual(["anthropic"]);
   });
 
+  it("persists a gateway provider's endpoint across upsert→serialize→parse (#8)", () => {
+    const out = upsertOpenCodeProviderToml("", {
+      providerId: "openrouter",
+      endpoint: "https://gw.example.com/v1",
+      models: ["openrouter/auto"],
+      scope: "repo",
+    });
+    // The endpoint must be written into the TOML, not silently dropped.
+    expect(out).toContain("https://gw.example.com/v1");
+    const s = parseHarnessSettings(out);
+    expect(s.opencodeProviders).toEqual(["openrouter"]);
+    expect(s.opencodeProviderEndpoints).toEqual({
+      openrouter: "https://gw.example.com/v1",
+    });
+  });
+
+  it("preserves existing provider endpoints when upserting another provider (#8)", () => {
+    let out = upsertOpenCodeProviderToml("", {
+      providerId: "openrouter",
+      endpoint: "https://or.example.com/v1",
+      scope: "repo",
+    });
+    out = upsertOpenCodeProviderToml(out, { providerId: "anthropic", scope: "repo" });
+    const s = parseHarnessSettings(out);
+    expect(s.opencodeProviders).toEqual(["openrouter", "anthropic"]);
+    expect(s.opencodeProviderEndpoints.openrouter).toBe("https://or.example.com/v1");
+  });
+
+  it("keeps non-gateway providers free of any endpoint key (#8)", () => {
+    const out = upsertOpenCodeProviderToml("", { providerId: "anthropic", scope: "repo" });
+    const s = parseHarnessSettings(out);
+    expect(s.opencodeProviderEndpoints).toEqual({});
+    expect(out.toLowerCase()).not.toContain("endpoint");
+  });
+
   it("never writes a secret/apiKey into the TOML (AC-7)", () => {
     const out = upsertOpenCodeProviderToml("", {
       providerId: "openrouter",
@@ -133,6 +168,18 @@ describe("writeOpenCodeProviderConfig (repo scope, fs)", () => {
 
     removeOpenCodeProviderConfig("openrouter", repoRoot);
     expect(readOpenCodeProviderConfig(repoRoot).providers).toEqual([]);
+  });
+
+  it("round-trips the gateway endpoint through write→read (#8)", () => {
+    writeOpenCodeProviderConfig(
+      { providerId: "openrouter", endpoint: "https://or.example.com/v1", scope: "repo" },
+      repoRoot
+    );
+    const raw = fs.readFileSync(repoSettingsPath(repoRoot), "utf-8");
+    expect(raw).toContain("https://or.example.com/v1");
+
+    const read = readOpenCodeProviderConfig(repoRoot);
+    expect(read.endpoints).toEqual({ openrouter: "https://or.example.com/v1" });
   });
 
   it("never writes a secret to the committed file (AC-10)", () => {

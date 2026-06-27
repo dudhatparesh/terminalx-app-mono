@@ -26,12 +26,19 @@ export interface HarnessSettings {
   opencodeProviders: string[];
   /** Selected OpenCode models ([harness.opencode] models). */
   opencodeModels: string[];
+  /**
+   * Per-provider gateway endpoint base URLs, keyed by provider id. Persisted as
+   * [harness.opencode.providers.<id>] endpoint = "..." (issue #8) so a Vercel AI
+   * Gateway / OpenRouter provider keeps its base URL across save/reload.
+   */
+  opencodeProviderEndpoints: Record<string, string>;
 }
 
 const EMPTY: HarnessSettings = {
   auth: {},
   opencodeProviders: [],
   opencodeModels: [],
+  opencodeProviderEndpoints: {},
 };
 
 /** Strip a trailing `# comment` that's outside a quoted string (best-effort). */
@@ -94,12 +101,20 @@ export function parseHarnessSettings(text: string): HarnessSettings {
     return { ...EMPTY };
   }
   const auth: Record<string, string> = {};
+  const opencodeProviderEndpoints: Record<string, string> = {};
   for (const k of Object.keys(flat)) {
     const m = k.match(/^harness\.([^.]+)\.auth$/);
     const harnessId = m?.[1];
     if (harnessId) {
       const val = asString(flat[k]);
       if (val) auth[harnessId] = val;
+    }
+    // [harness.opencode.providers.<id>] endpoint = "..." → per-provider base URL.
+    const ep = k.match(/^harness\.opencode\.providers\.([^.]+)\.endpoint$/);
+    const providerId = ep?.[1];
+    if (providerId) {
+      const val = asString(flat[k]);
+      if (val) opencodeProviderEndpoints[providerId] = val;
     }
   }
   return {
@@ -108,6 +123,7 @@ export function parseHarnessSettings(text: string): HarnessSettings {
     opencodeBin: asString(flat["harness.opencode.bin"]) || undefined,
     opencodeProviders: asArray(flat["harness.opencode.providers"]),
     opencodeModels: asArray(flat["harness.opencode.models"]),
+    opencodeProviderEndpoints,
   };
 }
 
@@ -145,6 +161,10 @@ export function resolveHarnessSettings(repoRoot?: string): HarnessSettings {
       ? repo.opencodeProviders
       : user.opencodeProviders,
     opencodeModels: repo.opencodeModels.length ? repo.opencodeModels : user.opencodeModels,
+    opencodeProviderEndpoints: {
+      ...user.opencodeProviderEndpoints,
+      ...repo.opencodeProviderEndpoints,
+    },
   };
 }
 
@@ -157,7 +177,13 @@ export function resolveHarnessSettings(repoRoot?: string): HarnessSettings {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Keys this module is allowed to write under [harness.opencode]. NO secret keys. */
-type OpenCodeBlock = { bin?: string; providers: string[]; models: string[] };
+type OpenCodeBlock = {
+  bin?: string;
+  providers: string[];
+  models: string[];
+  /** Per-provider gateway endpoint base URLs (issue #8). NON-SECRET. */
+  providerEndpoints: Record<string, string>;
+};
 
 function quote(s: string): string {
   // Minimal TOML string escaping for the constrained values we write
@@ -175,6 +201,14 @@ function renderOpenCodeBlock(block: OpenCodeBlock): string {
   if (block.bin !== undefined) lines.push(`bin = ${quote(block.bin)}`);
   lines.push(`providers = ${arr(block.providers)}`);
   lines.push(`models = ${arr(block.models)}`);
+  // Per-provider endpoint sub-tables (issue #8). Emitted in provider order, and
+  // only for providers that still carry an endpoint, so non-gateway providers
+  // produce no endpoint key at all.
+  for (const id of block.providers) {
+    const endpoint = block.providerEndpoints[id];
+    if (!endpoint) continue;
+    lines.push("", `[harness.opencode.providers.${id}]`, `endpoint = ${quote(endpoint)}`);
+  }
   return lines.join("\n") + "\n";
 }
 
@@ -187,6 +221,11 @@ function renderOpenCodeBlock(block: OpenCodeBlock): string {
 function spliceOpenCodeBlock(text: string, block: OpenCodeBlock): string {
   const lines = text.split("\n");
   const headerRe = /^\s*\[([^\]]+)\]\s*$/;
+  // The block owns [harness.opencode] AND its nested [harness.opencode.<...>]
+  // sub-tables (e.g. providers.<id>.endpoint, issue #8): they must be spliced as
+  // a unit so re-rendering replaces stale endpoint sub-tables instead of
+  // leaving duplicates.
+  const ownsTable = (t: string) => t === "harness.opencode" || t.startsWith("harness.opencode.");
   let start = -1;
   let end = lines.length;
   for (let i = 0; i < lines.length; i++) {
@@ -194,9 +233,9 @@ function spliceOpenCodeBlock(text: string, block: OpenCodeBlock): string {
     if (!m) continue;
     const table = (m[1] ?? "").trim();
     if (start === -1) {
-      if (table === "harness.opencode") start = i;
-    } else {
-      // first header after the block we're replacing
+      if (ownsTable(table)) start = i;
+    } else if (!ownsTable(table)) {
+      // first header outside the block we're replacing
       end = i;
       break;
     }
@@ -235,10 +274,18 @@ export function upsertOpenCodeProviderToml(
     if (m && !models.includes(m)) models.push(m);
   }
 
+  // Persist this provider's gateway endpoint (issue #8) without disturbing
+  // other providers' endpoints. A blank/absent endpoint clears any prior value.
+  const providerEndpoints = { ...current.opencodeProviderEndpoints };
+  const endpoint = provider.endpoint?.trim();
+  if (endpoint) providerEndpoints[provider.providerId] = endpoint;
+  else delete providerEndpoints[provider.providerId];
+
   return spliceOpenCodeBlock(text, {
     bin: current.opencodeBin,
     providers,
     models,
+    providerEndpoints,
   });
 }
 
@@ -246,10 +293,13 @@ export function upsertOpenCodeProviderToml(
 export function removeOpenCodeProviderToml(text: string, providerId: string): string {
   const current = parseHarnessSettings(text);
   const providers = current.opencodeProviders.filter((p) => p !== providerId);
+  const providerEndpoints = { ...current.opencodeProviderEndpoints };
+  delete providerEndpoints[providerId];
   return spliceOpenCodeBlock(text, {
     bin: current.opencodeBin,
     providers,
     models: current.opencodeModels,
+    providerEndpoints,
   });
 }
 
@@ -275,6 +325,8 @@ export interface OpenCodeProviderConfig {
   providers: string[];
   models: string[];
   bin?: string;
+  /** Per-provider gateway endpoints, keyed by provider id (issue #8). */
+  endpoints: Record<string, string>;
 }
 
 /** Read the [harness.opencode] providers/models for a scope (degrades to empty). */
@@ -283,7 +335,12 @@ export function readOpenCodeProviderConfig(
   scope: "user" | "repo" = "repo"
 ): OpenCodeProviderConfig {
   const s = loadHarnessSettingsFile(scopedSettingsPath(scope, repoRoot));
-  return { providers: s.opencodeProviders, models: s.opencodeModels, bin: s.opencodeBin };
+  return {
+    providers: s.opencodeProviders,
+    models: s.opencodeModels,
+    bin: s.opencodeBin,
+    endpoints: s.opencodeProviderEndpoints,
+  };
 }
 
 /**
