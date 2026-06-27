@@ -12,7 +12,10 @@ import { test, expect } from "@playwright/test";
 test.describe("Harnesses settings page", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/settings");
-    // The Harnesses section renders inside SettingsView.
+    // Settings is a dedicated full-page view with a left nav; the Harnesses
+    // section lives behind its nav item now (Conductor parity).
+    await expect(page.getByTestId("settings-shell")).toBeVisible();
+    await page.getByTestId("settings-nav-harnesses").click();
     await expect(page.getByTestId("harness-tabs")).toBeVisible();
   });
 

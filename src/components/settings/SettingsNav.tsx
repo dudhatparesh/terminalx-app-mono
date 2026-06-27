@@ -1,15 +1,16 @@
 "use client";
 
-// Settings shell left-nav (issue #11, §4.1). General · Account · Models ·
-// Harnesses · Environment · Git · Appearance, then a "More" group: Experimental,
-// Advanced. This spec OWNS the "Models" entry; sibling specs own the rest, so
-// the non-Models entries route to the legacy SettingsView sections for now.
+// Settings shell left-nav (issue #11, §4.1 + fidelity pass). General · Account ·
+// Models · Harnesses · Providers · Environment · Git · Appearance, then a "More"
+// group: Experimental, Advanced (Conductor parity). Selecting an entry shows that
+// section's page in SettingsShell.
 
 export type SettingsNavKey =
   | "general"
   | "account"
   | "models"
   | "harnesses"
+  | "providers"
   | "environment"
   | "git"
   | "appearance"
@@ -21,6 +22,7 @@ const PRIMARY: Array<{ key: SettingsNavKey; label: string }> = [
   { key: "account", label: "Account" },
   { key: "models", label: "Models" },
   { key: "harnesses", label: "Harnesses" },
+  { key: "providers", label: "Providers" },
   { key: "environment", label: "Environment" },
   { key: "git", label: "Git" },
   { key: "appearance", label: "Appearance" },

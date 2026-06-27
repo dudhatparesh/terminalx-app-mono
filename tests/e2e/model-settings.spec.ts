@@ -13,6 +13,10 @@ import { test, expect } from "@playwright/test";
 test.describe("Models settings page", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/settings");
+    // Settings is a dedicated full-page view with a left nav; the Models section
+    // lives behind its nav item now (Conductor parity).
+    await expect(page.getByTestId("settings-shell")).toBeVisible();
+    await page.getByTestId("settings-nav-models").click();
     await expect(page.getByTestId("settings-models-section")).toBeVisible();
     await expect(page.getByTestId("models-settings-page")).toBeVisible();
   });
@@ -53,6 +57,7 @@ test.describe("Models settings page", () => {
     await expect(page.getByTestId("models-save-status")).toContainText(/saved/i);
 
     await page.reload();
+    await page.getByTestId("settings-nav-models").click();
     await expect(page.getByTestId("models-default-model")).toHaveValue("claude:opus-4-8-1m");
     await expect(page.getByTestId("models-review-model")).toHaveValue("codex:gpt-5-codex");
   });
@@ -73,12 +78,17 @@ test.describe("Models settings page", () => {
   });
 
   test("toggling plan mode persists across reload", async ({ page }) => {
+    // The plan-mode control is now an iOS-style switch (role="switch"); click to
+    // toggle it on and assert via aria-checked.
     const toggle = page.getByTestId("models-plan-mode");
-    await toggle.check();
+    await expect(toggle).not.toBeChecked();
+    await toggle.click();
+    await expect(toggle).toBeChecked();
     await page.getByTestId("models-save").click();
     await expect(page.getByTestId("models-save-status")).toContainText(/saved/i);
 
     await page.reload();
+    await page.getByTestId("settings-nav-models").click();
     await expect(page.getByTestId("models-plan-mode")).toBeChecked();
   });
 

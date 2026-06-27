@@ -170,16 +170,25 @@ function ToggleRow({
           {sublabel && <p className="text-[10px] text-[#6b7569] mt-0.5">{sublabel}</p>}
           {children}
         </div>
-        <label className="inline-flex items-center cursor-pointer shrink-0">
-          <input
-            type="checkbox"
-            data-testid={testid}
-            checked={checked}
-            disabled={readOnly}
-            onChange={(e) => onChange(e.target.checked)}
-            className="accent-[#00ff88] w-4 h-4 disabled:opacity-50"
+        <button
+          type="button"
+          role="switch"
+          aria-checked={checked}
+          aria-label={label}
+          data-testid={testid}
+          disabled={readOnly}
+          onClick={() => onChange(!checked)}
+          className={`relative inline-flex h-[22px] w-[38px] shrink-0 cursor-pointer items-center rounded-full border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            checked ? "bg-[#00cc6e] border-[#00cc6e]" : "bg-[#1a1d24] border-[#252933]"
+          }`}
+        >
+          <span
+            aria-hidden="true"
+            className={`pointer-events-none inline-block h-[16px] w-[16px] transform rounded-full bg-white shadow transition-transform ${
+              checked ? "translate-x-[18px]" : "translate-x-[3px]"
+            }`}
           />
-        </label>
+        </button>
       </div>
     </div>
   );

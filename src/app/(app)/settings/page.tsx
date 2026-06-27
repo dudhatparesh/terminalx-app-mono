@@ -2,11 +2,13 @@
 
 import dynamic from "next/dynamic";
 
-const SettingsView = dynamic(
-  () => import("@/components/settings/SettingsView").then((m) => m.SettingsView),
+// The settings surface is a dedicated full-page view with a left nav (Conductor
+// parity). Rendered client-only: it depends on browser-only hooks/state.
+const SettingsShell = dynamic(
+  () => import("@/components/settings/SettingsShell").then((m) => m.SettingsShell),
   { ssr: false }
 );
 
 export default function SettingsPage() {
-  return <SettingsView />;
+  return <SettingsShell />;
 }

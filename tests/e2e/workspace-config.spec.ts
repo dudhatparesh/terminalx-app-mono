@@ -76,6 +76,11 @@ test("GET /api/workspace/config returns the resolved repo config (no secrets)", 
 test("Settings → Workspace section renders the repo config + Edit affordance", async ({ page }) => {
   await page.goto("/settings");
 
+  // Settings is a dedicated full-page view with a left nav; the workspace config
+  // lives behind the Environment nav item now (Conductor parity).
+  await expect(page.getByTestId("settings-shell")).toBeVisible();
+  await page.getByTestId("settings-nav-environment").click();
+
   const section = page.getByTestId("workspace-settings-section");
   await expect(section).toBeVisible();
 

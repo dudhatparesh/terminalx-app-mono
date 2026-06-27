@@ -64,6 +64,11 @@ test("connects a GitHub PAT and shows connected status", async ({ page }) => {
 
   await page.goto("/settings");
 
+  // Settings is a dedicated full-page view with a left nav; the GitHub surface
+  // lives behind the Git nav item now (Conductor parity).
+  await expect(page.getByTestId("settings-shell")).toBeVisible();
+  await page.getByTestId("settings-nav-git").click();
+
   const panel = page.getByTestId("github-settings");
   await expect(panel).toBeVisible();
 
