@@ -7,6 +7,11 @@
 // nested rows: status icon + branch name + diff stat + a "⋮" menu (Collapse,
 // Archive). Collapse/expand toggles the whole group.
 //
+// Deleting a workspace is IRREVERSIBLE (it drops the project and removes ALL of
+// its worktrees), so the menu item never deletes directly — it opens an in-app
+// confirmation dialog (ConfirmDeleteDialog) that names the workspace and warns
+// about the worktrees. deleteWorkspace fires ONLY on explicit confirm.
+//
 // CLIENT/SERVER BOUNDARY: this file imports ONLY browser-safe modules
 // (@/types/workspace formatters + the useWorkspaces hook, which fetches the
 // API). It never imports the workspace store / resolve / git / github server
@@ -15,6 +20,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   Archive,
   ChevronDown,
   ChevronRight,
@@ -122,6 +128,88 @@ function MenuItem({
   );
 }
 
+/**
+ * Confirmation dialog for the irreversible "Delete workspace" action (issue #9).
+ * Renders a dark-theme modal that names the workspace, warns it removes every
+ * worktree, and exposes Cancel / Delete. The destructive callback fires ONLY
+ * when the user clicks Delete; closing or Cancel never deletes. Esc + backdrop
+ * click both cancel.
+ */
+function ConfirmDeleteDialog({
+  workspace,
+  worktreeCount,
+  onCancel,
+  onConfirm,
+}: {
+  workspace: WorkspaceView;
+  worktreeCount: number;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <div
+      data-testid="workspace-delete-confirm"
+      role="alertdialog"
+      aria-modal="true"
+      aria-label={`Delete workspace ${workspace.name}`}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onMouseDown={(e) => {
+        // Backdrop click cancels; clicks inside the panel do not bubble here.
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div className="w-full max-w-[340px] rounded-lg border border-[#252933] bg-[#14161e] p-4 shadow-xl shadow-black/50">
+        <div className="flex items-start gap-2.5">
+          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#2a1416] text-[#ff6b6b]">
+            <AlertTriangle size={15} />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-[13px] font-medium text-[#e6f0e4]">Delete workspace</h2>
+            <p className="mt-1 text-[12px] leading-relaxed text-[#a8b3a6]">
+              Delete{" "}
+              <span
+                className="font-medium text-[#e6f0e4]"
+                data-testid="workspace-delete-confirm-name"
+              >
+                {workspace.name}
+              </span>
+              ? This removes the workspace and{" "}
+              {worktreeCount === 0
+                ? "all of its worktrees"
+                : `all ${worktreeCount} of its worktree${worktreeCount === 1 ? "" : "s"}`}
+              . This action cannot be undone.
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            data-testid="workspace-delete-confirm-cancel"
+            onClick={onCancel}
+            className="rounded border border-[#252933] px-3 py-1.5 text-[12px] text-[#a8b3a6] transition-colors hover:bg-[#1a1d24] hover:text-[#e6f0e4]"
+          >
+            Cancel
+          </button>
+          <button
+            data-testid="workspace-delete-confirm-accept"
+            onClick={onConfirm}
+            className="rounded bg-[#ff6b6b] px-3 py-1.5 text-[12px] font-medium text-[#1a0c0d] transition-colors hover:bg-[#ff8585]"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorktreeRow({
   worktree,
   activeSession,
@@ -214,7 +302,7 @@ function WorkspaceGroup({
   activeSession,
   onOpenWorktree,
   onAddWorktree,
-  onDelete,
+  onRequestDelete,
   onCollapseWorktree,
   onArchiveWorktree,
 }: {
@@ -222,7 +310,7 @@ function WorkspaceGroup({
   activeSession: string | null;
   onOpenWorktree: (sessionName: string) => void;
   onAddWorktree: (repoRoot: string) => void;
-  onDelete: (id: string) => void;
+  onRequestDelete: (workspace: WorkspaceView) => void;
   onCollapseWorktree: (sessionName: string, collapsed: boolean) => void;
   onArchiveWorktree: (sessionName: string) => void;
 }) {
@@ -274,7 +362,8 @@ function WorkspaceGroup({
               testid="workspace-menu-delete"
               danger
               onClick={() => {
-                onDelete(workspace.id);
+                // Never deletes directly — opens the confirmation dialog (#9).
+                onRequestDelete(workspace);
                 setMenuOpen(false);
               }}
             >
@@ -404,6 +493,11 @@ export function WorkspaceSidebar({ activeSession }: { activeSession: string | nu
     return () => window.removeEventListener("terminalx:archive-request", onArchiveRequest);
   }, [archiveWorktree]);
 
+  // The workspace pending an irreversible delete — set when the user picks
+  // "Delete workspace" from the menu, cleared on Cancel/confirm. The actual
+  // deleteWorkspace call happens ONLY when the dialog's Delete is confirmed (#9).
+  const [pendingDelete, setPendingDelete] = useState<WorkspaceView | null>(null);
+
   const openWorktree = (sessionName: string) => {
     router.push(`/workspace/${encodeURIComponent(sessionName)}`);
   };
@@ -414,8 +508,9 @@ export function WorkspaceSidebar({ activeSession }: { activeSession: string | nu
     router.push(`/dashboard?newWorktree=${encodeURIComponent(repoRoot)}`);
   };
 
-  const handleDelete = (id: string) => {
-    void deleteWorkspace(id);
+  const confirmDelete = () => {
+    if (pendingDelete) void deleteWorkspace(pendingDelete.id);
+    setPendingDelete(null);
   };
 
   return (
@@ -435,7 +530,7 @@ export function WorkspaceSidebar({ activeSession }: { activeSession: string | nu
               activeSession={activeSession}
               onOpenWorktree={openWorktree}
               onAddWorktree={addWorktree}
-              onDelete={handleDelete}
+              onRequestDelete={setPendingDelete}
               onCollapseWorktree={(name, collapsed) => void setWorktreeCollapsed(name, collapsed)}
               onArchiveWorktree={(name) => void archiveWorktree(name)}
             />
@@ -445,6 +540,15 @@ export function WorkspaceSidebar({ activeSession }: { activeSession: string | nu
             onRestore={(name) => void restoreWorktree(name)}
           />
         </>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDeleteDialog
+          workspace={pendingDelete}
+          worktreeCount={pendingDelete.worktrees.length}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={confirmDelete}
+        />
       )}
     </div>
   );
