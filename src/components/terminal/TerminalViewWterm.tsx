@@ -3,9 +3,35 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal, type TerminalHandle } from "@wterm/react";
 import "@wterm/react/css";
-import { Upload } from "lucide-react";
+import { Check, Copy, Upload } from "lucide-react";
 import { subscribeToTerminalBus } from "@/lib/terminal-bus";
 import type { TerminalViewProps } from "./types";
+
+function nodeIsInside(element: HTMLElement, node: Node): boolean {
+  const target = node.nodeType === Node.ELEMENT_NODE ? node : node.parentNode;
+  return element.contains(target);
+}
+
+function getSelectionTextInside(element: HTMLElement): string {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return "";
+
+  const text = selection.toString();
+  if (!text) return "";
+
+  for (let i = 0; i < selection.rangeCount; i++) {
+    const range = selection.getRangeAt(i);
+    if (
+      nodeIsInside(element, range.commonAncestorContainer) ||
+      nodeIsInside(element, range.startContainer) ||
+      nodeIsInside(element, range.endContainer)
+    ) {
+      return text;
+    }
+  }
+
+  return "";
+}
 
 export function TerminalViewWterm({
   sessionId,
@@ -13,6 +39,7 @@ export function TerminalViewWterm({
   onReconnect,
   onSessionEnded,
 }: TerminalViewProps) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<TerminalHandle>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
@@ -21,8 +48,12 @@ export function TerminalViewWterm({
   const dimsRef = useRef<{ cols: number; rows: number }>({ cols: 80, rows: 24 });
   const [isDragging, setIsDragging] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [hasSelection, setHasSelection] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [copyBtnPos, setCopyBtnPos] = useState<{ x: number; y: number } | null>(null);
   const dragCounterRef = useRef(0);
   const connectRef = useRef<(() => void) | null>(null);
+  const selectedTextRef = useRef("");
 
   const connect = useCallback(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -134,6 +165,93 @@ export function TerminalViewWterm({
     }
   }, []);
 
+  const syncSelection = useCallback(() => {
+    const wrapper = wrapperRef.current;
+    const text = wrapper ? getSelectionTextInside(wrapper) : "";
+    selectedTextRef.current = text;
+
+    const has = text.length > 0;
+    setHasSelection(has);
+    setCopied(false);
+    if (!has) setCopyBtnPos(null);
+    return text;
+  }, []);
+
+  const anchorCopyButton = useCallback(
+    (clientX: number, clientY: number) => {
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+
+      requestAnimationFrame(() => {
+        const text = syncSelection();
+        if (!text) return;
+
+        const rect = wrapper.getBoundingClientRect();
+        const buttonWidth = 84;
+        const buttonHeight = 32;
+        const gap = 8;
+        let x = clientX - rect.left + gap;
+        let y = clientY - rect.top + gap;
+
+        if (x + buttonWidth > rect.width) x = clientX - rect.left - buttonWidth - gap;
+        if (y + buttonHeight > rect.height) y = clientY - rect.top - buttonHeight - gap;
+        x = Math.max(4, Math.min(x, Math.max(4, rect.width - buttonWidth - 4)));
+        y = Math.max(4, Math.min(y, Math.max(4, rect.height - buttonHeight - 4)));
+
+        setCopyBtnPos({ x, y });
+      });
+    },
+    [syncSelection]
+  );
+
+  useEffect(() => {
+    const onSelectionChange = () => {
+      syncSelection();
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("[data-terminal-copy-button='true']")) {
+        return;
+      }
+      anchorCopyButton(event.clientX, event.clientY);
+    };
+
+    document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("pointerup", onPointerUp);
+    return () => {
+      document.removeEventListener("selectionchange", onSelectionChange);
+      document.removeEventListener("pointerup", onPointerUp);
+    };
+  }, [anchorCopyButton, syncSelection]);
+
+  const handleCopy = useCallback(async () => {
+    const wrapper = wrapperRef.current;
+    const text = selectedTextRef.current || (wrapper ? getSelectionTextInside(wrapper) : "");
+    if (!text) return;
+
+    const finish = () => {
+      setCopied(true);
+      setTimeout(() => {
+        setCopied(false);
+        setCopyBtnPos(null);
+      }, 1200);
+    };
+
+    try {
+      await navigator.clipboard.writeText(text);
+      finish();
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      finish();
+    }
+  }, []);
+
   const uploadFile = useCallback(async (file: File) => {
     setUploadStatus(`Uploading ${file.name}...`);
     try {
@@ -196,6 +314,7 @@ export function TerminalViewWterm({
 
   return (
     <div
+      ref={wrapperRef}
       className="h-full w-full relative"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -222,6 +341,36 @@ export function TerminalViewWterm({
             </span>
           </div>
         </div>
+      )}
+
+      {hasSelection && copyBtnPos && (
+        <button
+          type="button"
+          data-terminal-copy-button="true"
+          aria-label={copied ? "copied selection" : "copy selection"}
+          onClick={handleCopy}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onPointerUp={(e) => e.stopPropagation()}
+          className="absolute flex items-center gap-1.5 px-2.5 py-1.5
+            rounded bg-[#14161e] border border-[#252933] text-[12px] text-[#e6f0e4]
+            hover:bg-[#1a1d24] transition-colors shadow-lg z-50 cursor-pointer"
+          style={{ left: copyBtnPos.x, top: copyBtnPos.y }}
+        >
+          {copied ? (
+            <>
+              <Check size={14} className="text-[#00ff88]" />
+              copied
+            </>
+          ) : (
+            <>
+              <Copy size={14} />
+              copy
+            </>
+          )}
+        </button>
       )}
 
       {uploadStatus && (
