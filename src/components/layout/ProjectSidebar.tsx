@@ -31,9 +31,11 @@ import {
   MoreVertical,
   Plus,
   RotateCcw,
+  Terminal,
   Trash2,
 } from "lucide-react";
 import { useProjects } from "@/hooks/useProjects";
+import { useSessions, type TmuxSession } from "@/hooks/useSessions";
 import { formatDiffStat, statusIcon } from "@/types/project";
 import type { WorkspaceStatus, WorkspaceView, ProjectView } from "@/types/project";
 
@@ -58,6 +60,92 @@ function StatusIcon({ status }: { status: WorkspaceStatus }) {
   }
   return (
     <GitBranch size={13} className="shrink-0 text-[#6b7569]" data-testid="wt-icon-in-progress" />
+  );
+}
+
+function sessionKindLabel(kind?: string): string {
+  return kind || "bash";
+}
+
+function StandaloneSessionRow({
+  session,
+  activeSession,
+  onOpen,
+}: {
+  session: TmuxSession;
+  activeSession: string | null;
+  onOpen: (sessionName: string) => void;
+}) {
+  const active = session.name === activeSession;
+  const kind = sessionKindLabel(session.kind);
+
+  return (
+    <button
+      type="button"
+      data-testid="standalone-session-row"
+      data-session={session.name}
+      onClick={() => onOpen(session.name)}
+      className={`group flex h-8 w-full items-center gap-2 rounded px-2 text-left text-[12px] transition-colors focus-visible:ring-2 focus-visible:ring-[#00cc6e] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1117] ${
+        active ? "bg-[#14161e] text-[#e6f0e4]" : "text-[#a8b3a6] hover:bg-[#14161e]"
+      }`}
+    >
+      <Terminal size={13} className={`shrink-0 ${active ? "text-[#00ff88]" : "text-[#6b7569]"}`} />
+      <span className="min-w-0 flex-1 truncate" title={session.name}>
+        {session.name}
+      </span>
+      <span className="shrink-0 rounded border border-[#1a1d24] px-1.5 py-0.5 text-[10px] text-[#6b7569] group-hover:text-[#a8b3a6]">
+        {kind}
+      </span>
+    </button>
+  );
+}
+
+function StandaloneSessionsSection({
+  sessions,
+  isLoading,
+  activeSession,
+  onOpen,
+}: {
+  sessions: TmuxSession[];
+  isLoading: boolean;
+  activeSession: string | null;
+  onOpen: (sessionName: string) => void;
+}) {
+  const standalone = sessions.filter((session) => !session.worktree);
+
+  if (isLoading && standalone.length === 0) {
+    return (
+      <div className="mt-3 border-t border-[#1a1d24] px-2 py-3 text-[11px] text-[#6b7569]">
+        loading sessions...
+      </div>
+    );
+  }
+
+  if (standalone.length === 0) return null;
+
+  return (
+    <div data-testid="standalone-sessions-section" className="mt-3 border-t border-[#1a1d24] pt-2">
+      <div className="flex items-center gap-1.5 px-1 py-1.5 text-[12px] text-[#6b7569]">
+        <Terminal size={12} />
+        <span className="font-medium">Sessions</span>
+        <span
+          data-testid="standalone-sessions-count"
+          className="ml-1 rounded-full bg-[#1a1d24] px-1.5 text-[10px] text-[#a8b3a6]"
+        >
+          {standalone.length}
+        </span>
+      </div>
+      <div className="mt-0.5 space-y-0.5" data-testid="standalone-sessions-list">
+        {standalone.map((session) => (
+          <StandaloneSessionRow
+            key={session.name}
+            session={session}
+            activeSession={activeSession}
+            onOpen={onOpen}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -480,6 +568,7 @@ export function ProjectSidebar({ activeSession }: { activeSession: string | null
     archiveWorkspace,
     restoreWorkspace,
   } = useProjects();
+  const { sessions, isLoading: sessionsLoading } = useSessions();
 
   // The review-panel Archive button (ReviewStatusBar) dispatches this event for
   // the CURRENT workspace; the sidebar owns the archive flow (#9), so it listens
@@ -538,6 +627,13 @@ export function ProjectSidebar({ activeSession }: { activeSession: string | null
           <ArchivedSection projects={projects} onRestore={(name) => void restoreWorkspace(name)} />
         </>
       )}
+
+      <StandaloneSessionsSection
+        sessions={sessions}
+        isLoading={sessionsLoading}
+        activeSession={activeSession}
+        onOpen={openWorkspace}
+      />
 
       {pendingDelete && (
         <ConfirmDeleteDialog

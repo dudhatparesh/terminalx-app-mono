@@ -58,6 +58,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ name: strin
       session: name,
       maxFiles,
       includeHunks,
+      includeWorkingTree: true,
     });
     return NextResponse.json(response);
   } catch (err) {

@@ -51,7 +51,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ name: strin
       return NextResponse.json({ error: "No base branch", code: "no-base" }, { status: 409 });
     }
 
-    const file = computeFileDiff({ safeRoot, base, head, path: filePath, context });
+    const file = computeFileDiff({
+      safeRoot,
+      base,
+      head,
+      path: filePath,
+      context,
+      includeWorkingTree: true,
+    });
     if (!file) {
       return NextResponse.json({ error: "File not found in diff" }, { status: 404 });
     }

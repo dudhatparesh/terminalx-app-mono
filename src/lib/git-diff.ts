@@ -378,11 +378,14 @@ export function computeDiff(input: {
   context?: number;
   maxFiles?: number;
   includeHunks?: boolean;
+  includeWorkingTree?: boolean;
 }): DiffResponse {
   const { safeRoot, base, head } = input;
   const context = input.context ?? 3;
   const maxFiles = input.maxFiles ?? 300;
-  const range = `${base}...${head}`;
+  // Session review surfaces need live local edits; `git diff <base>` compares
+  // the working tree to base, while the default keeps PR-like three-dot diffs.
+  const range = input.includeWorkingTree ? base : `${base}...${head}`;
 
   const nameStatus = git(safeRoot, ["diff", "--name-status", "-M", "-C", range]);
   const numStat = git(safeRoot, ["diff", "--numstat", "-M", "-C", range]);
@@ -430,10 +433,12 @@ export function computeFileDiff(input: {
   head: string;
   path: string;
   context?: number;
+  includeWorkingTree?: boolean;
 }): FileDiff | null {
   const { safeRoot, base, head, path } = input;
   const context = input.context ?? 3;
-  const range = `${base}...${head}`;
+  // Keep lazy per-file hunks aligned with the list endpoint's diff mode.
+  const range = input.includeWorkingTree ? base : `${base}...${head}`;
 
   const nameStatus = git(safeRoot, ["diff", "--name-status", "-M", "-C", range, "--", path]);
   const numStat = git(safeRoot, ["diff", "--numstat", "-M", "-C", range, "--", path]);

@@ -422,6 +422,48 @@ describeGit("computeDiff against a real repo", () => {
     expect(file!.hunks!.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("can include live working-tree edits in the diff and file hunks", () => {
+    fs.writeFileSync(path.join(repoDir, "src", "index.ts"), "export const value = 3;\n");
+
+    const committedOnly = computeDiff({
+      safeRoot: repoDir,
+      base: "main",
+      head: "feature/sample-change",
+    });
+    const committedLines = committedOnly.files
+      .find((f) => f.path === "src/index.ts")!
+      .hunks!.flatMap((h) => h.lines);
+    expect(
+      committedLines.some((l) => l.type === "addition" && l.content.includes("value = 2"))
+    ).toBe(true);
+    expect(committedLines.some((l) => l.content.includes("value = 3"))).toBe(false);
+
+    const live = computeDiff({
+      safeRoot: repoDir,
+      base: "main",
+      head: "feature/sample-change",
+      includeWorkingTree: true,
+    });
+    const liveLines = live.files
+      .find((f) => f.path === "src/index.ts")!
+      .hunks!.flatMap((h) => h.lines);
+    expect(liveLines.some((l) => l.type === "addition" && l.content.includes("value = 3"))).toBe(
+      true
+    );
+    expect(liveLines.some((l) => l.content.includes("value = 2"))).toBe(false);
+
+    const file = computeFileDiff({
+      safeRoot: repoDir,
+      base: "main",
+      head: "feature/sample-change",
+      path: "src/index.ts",
+      includeWorkingTree: true,
+    });
+    expect(file!.hunks!.flatMap((h) => h.lines).some((l) => l.content.includes("value = 3"))).toBe(
+      true
+    );
+  });
+
   it("detects a rename as renamed with oldPath", () => {
     git(repoDir, ["mv", "README.md", "READYOU.md"]);
     git(repoDir, ["commit", "-m", "rename readme"]);

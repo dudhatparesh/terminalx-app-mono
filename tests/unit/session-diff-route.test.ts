@@ -118,4 +118,19 @@ describeGit("GET /api/sessions/[name]/diff resolution", () => {
     expect(body.files[0].hunks).toBeUndefined();
     expect(body.request.session).toBe("nonexistent-session");
   });
+
+  it("includes live working-tree changes for a session diff", async () => {
+    fs.writeFileSync(path.join(repoDir, "b.ts"), "const b = 1;\n");
+    git(repoDir, ["add", "b.ts"]);
+
+    const { GET } = await loadSessionDiffRoute();
+    const { req, ctx } = mockGet("nonexistent-session", {
+      base: "main",
+      head: "feature/sample-change",
+    });
+    const res = await GET(req, ctx);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.files.map((f: { path: string }) => f.path).sort()).toEqual(["a.ts", "b.ts"]);
+  });
 });
