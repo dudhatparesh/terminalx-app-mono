@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { useRouter } from "next/navigation";
-import { ChevronRight, History, Plus, Settings } from "lucide-react";
+import { ChevronRight, History, Plus, RotateCcw, Settings, Terminal } from "lucide-react";
 import { TopNav } from "./TopNav";
 import { StatusBar } from "./StatusBar";
 // Project sidebar (#12): the left rail groups workspaces under their project
@@ -16,6 +16,12 @@ import { ProjectSidebar } from "./ProjectSidebar";
 import { ReviewPanel } from "@/components/review/ReviewPanel";
 import { CommandPalette } from "./CommandPalette";
 import { useOpenTabs } from "@/hooks/useOpenTabs";
+
+const SIDEBAR_LINKS = [
+  { href: "/playground", label: "Playground", icon: Terminal },
+  { href: "/replay", label: "Replays", icon: RotateCcw },
+  { href: "/settings", label: "Settings", icon: Settings },
+];
 
 function LeftSidebar({
   activeSession,
@@ -75,16 +81,30 @@ function LeftSidebar({
 
         {/* #12: project (repo) headers, each grouping its workspaces. */}
         <ProjectSidebar activeSession={activeSession} />
-      </div>
 
-      <div className="flex h-12 items-center gap-2 border-t border-[#1a1d24] px-3 text-[#6b7569]">
-        <Link
-          href="/settings"
-          className="rounded p-1.5 transition-colors hover:bg-[#14161e] hover:text-[#e6f0e4]"
-          aria-label="settings"
-        >
-          <Settings size={14} />
-        </Link>
+        <div className="mt-5 border-t border-[#1a1d24] pt-3" data-testid="sidebar-tools">
+          <div className="px-1 text-[10px] uppercase tracking-wider text-[#6b7569]">Tools</div>
+          <div className="mt-1 space-y-0.5">
+            {SIDEBAR_LINKS.map(({ href, label, icon: Icon }) => {
+              const active = path === href || path.startsWith(`${href}/`);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  aria-current={active ? "page" : undefined}
+                  className={`flex h-10 items-center gap-2 rounded px-2 text-[13px] transition-colors focus-visible:ring-2 focus-visible:ring-[#00cc6e] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1117] ${
+                    active
+                      ? "bg-[#14161e] text-[#e6f0e4]"
+                      : "text-[#a8b3a6] hover:bg-[#14161e] hover:text-[#e6f0e4]"
+                  }`}
+                >
+                  <Icon size={14} className={active ? "text-[#00ff88]" : "text-[#6b7569]"} />
+                  <span>{label}</span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </aside>
   );
