@@ -5,6 +5,7 @@ import type { Bot } from "grammy";
 import { watch, FSWatcher } from "chokidar";
 import { markdownToTelegramV2, splitForTelegram } from "./render";
 import { listTopics } from "./state";
+import { sendReferencedAttachments } from "./attachments";
 
 interface SessionMetaEntry {
   timestamp?: string;
@@ -64,7 +65,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function enqueueSend(bot: Bot, chatId: number, topicId: number, raw: string): Promise<void> {
+async function enqueueSend(
+  bot: Bot,
+  chatId: number,
+  topicId: number,
+  raw: string,
+  baseDir?: string
+): Promise<void> {
   const prev = sendQueues.get(topicId) ?? Promise.resolve();
   const next = prev.then(async () => {
     const send = async (text: string, parseMode: "MarkdownV2" | undefined) => {
@@ -84,6 +91,7 @@ async function enqueueSend(bot: Bot, chatId: number, topicId: number, raw: strin
       for (const chunk of splitForTelegram(markdownToTelegramV2(raw), 3900)) {
         await send(chunk, "MarkdownV2");
       }
+      await sendReferencedAttachments(bot, chatId, topicId, raw, { baseDir });
       return;
     } catch (err) {
       const e = err as { error_code?: number; parameters?: { retry_after?: number } };
@@ -99,6 +107,7 @@ async function enqueueSend(bot: Bot, chatId: number, topicId: number, raw: strin
       for (const chunk of chunkText(raw, 3900)) {
         await send(chunk, undefined);
       }
+      await sendReferencedAttachments(bot, chatId, topicId, raw, { baseDir });
     } catch (err) {
       const e = err as { error_code?: number; parameters?: { retry_after?: number } };
       if (e.error_code === 429) {
@@ -434,7 +443,7 @@ export function startCodexTranscript(
         }
         const text = renderEntry(entry);
         if (!text) continue;
-        await enqueueSend(bot, chatId, topicId, text);
+        await enqueueSend(bot, chatId, topicId, text, opts.cwd);
       }
     } catch (err) {
       console.error("[telegram/codex] flush failed", err);
