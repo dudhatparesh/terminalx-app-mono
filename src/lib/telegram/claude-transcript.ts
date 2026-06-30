@@ -5,6 +5,7 @@ import type { Bot } from "grammy";
 import { watch, FSWatcher } from "chokidar";
 import { markdownToTelegramV2, splitForTelegram } from "./render";
 import { listTopics } from "./state";
+import { sendReferencedAttachments } from "./attachments";
 
 interface AssistantEntry {
   type: "assistant";
@@ -52,7 +53,13 @@ const cooldownUntil = new Map<number, number>();
 
 const MIN_GAP_MS = 1100;
 
-async function enqueueSend(bot: Bot, chatId: number, topicId: number, raw: string): Promise<void> {
+async function enqueueSend(
+  bot: Bot,
+  chatId: number,
+  topicId: number,
+  raw: string,
+  baseDir?: string
+): Promise<void> {
   const prev = sendQueues.get(topicId) ?? Promise.resolve();
   const next = prev.then(async () => {
     const send = async (text: string, parseMode: "MarkdownV2" | undefined) => {
@@ -72,6 +79,7 @@ async function enqueueSend(bot: Bot, chatId: number, topicId: number, raw: strin
       for (const chunk of splitForTelegram(markdownToTelegramV2(raw), 4000)) {
         await send(chunk, "MarkdownV2");
       }
+      await sendReferencedAttachments(bot, chatId, topicId, raw, { baseDir });
       return;
     } catch (err) {
       const e = err as { error_code?: number; parameters?: { retry_after?: number } };
@@ -89,6 +97,7 @@ async function enqueueSend(bot: Bot, chatId: number, topicId: number, raw: strin
       for (const chunk of splitForTelegram(raw, 4000)) {
         await send(chunk, undefined);
       }
+      await sendReferencedAttachments(bot, chatId, topicId, raw, { baseDir });
     } catch (err) {
       const e = err as { error_code?: number; parameters?: { retry_after?: number } };
       if (e.error_code === 429) {
@@ -484,7 +493,7 @@ export function startClaudeTranscript(
         }
         const raw = renderEntry(entry);
         if (!raw) continue;
-        await enqueueSend(bot, chatId, topicId, raw);
+        await enqueueSend(bot, chatId, topicId, raw, opts.cwd);
       }
     } catch (err) {
       console.error("[telegram/claude] flush failed", err);
