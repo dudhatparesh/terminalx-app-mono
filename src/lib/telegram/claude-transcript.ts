@@ -197,57 +197,41 @@ function excludedJsonls(skipTopicId?: number): Set<string> {
 function firstEntryTimestampMs(jsonl: string): number | null {
   try {
     const fd = fs.openSync(jsonl, "r");
-    const buf = Buffer.alloc(64 * 1024);
+    const buf = Buffer.alloc(256 * 1024);
     const n = fs.readSync(fd, buf, 0, buf.length, 0);
     fs.closeSync(fd);
-    const firstLine = buf
-      .toString("utf-8", 0, n)
-      .split("\n")
-      .find((l) => l.trim());
-    if (!firstLine) return null;
-    const entry = JSON.parse(firstLine) as { timestamp?: string };
-    const ms = entry.timestamp ? Date.parse(entry.timestamp) : Number.NaN;
-    return Number.isFinite(ms) ? ms : null;
+    for (const line of buf.toString("utf-8", 0, n).split("\n")) {
+      if (!line.trim()) continue;
+      let entry: { timestamp?: string };
+      try {
+        entry = JSON.parse(line) as { timestamp?: string };
+      } catch {
+        continue;
+      }
+      const ms = entry.timestamp ? Date.parse(entry.timestamp) : Number.NaN;
+      if (Number.isFinite(ms)) return ms;
+    }
   } catch {
-    return null;
+    /* ignore unreadable files */
   }
+  return null;
 }
 
 /**
- * True when a topic's bound transcript cannot belong to that topic's pane.
- *
- * A claude process writes its transcript from the moment it launches, so a
- * pane whose claude has been running since T owns a file born ~T. If the bound
- * file was born well AFTER this pane's claude started — while that same claude
- * is still the running one — the file is a different, later-launched session
- * in the shared project dir. The binding was mis-resolved: it black-holes this
- * topic and cross-routes the other session's replies here. The caller drops
- * the watcher and clears the binding so it re-resolves to the pane's own file.
- *
- * The inverse (bound file OLDER than the pane's claude = an in-place restart)
- * is NOT foreign — findLiveReplacementJsonl rotates forward for that. We only
- * fire when the bound file is too NEW to be ours, behind a generous margin so
- * ordinary clock skew or a slow first write never trips it. We rely solely on
- * the first-entry timestamp (or birthtime); file ctime is unusable here since
- * it advances on every append and would flag a long-lived own file as foreign.
+ * Legacy foreign-binding hook. Claude can rotate transcript JSONLs inside one
+ * long-running process, so birth time relative to the pane process is not a
+ * reliable ownership signal anymore. Keep the hook as a no-op and rely on
+ * explicit live replacement plus per-topic JSONL exclusions.
  */
 export function bindingIsForeignToPane(
-  currentJsonlPath: string,
-  claudeStartMs: number | null
+  _currentJsonlPath: string,
+  _claudeStartMs: number | null
 ): boolean {
-  const FOREIGN_BIRTH_MARGIN_MS = 2 * 60 * 1000;
-  if (claudeStartMs === null) return false;
-  let bornMs = firstEntryTimestampMs(currentJsonlPath);
-  if (bornMs === null) {
-    try {
-      const s = fs.statSync(currentJsonlPath);
-      bornMs = s.birthtimeMs && s.birthtimeMs > 0 ? s.birthtimeMs : null;
-    } catch {
-      return false;
-    }
-  }
-  if (bornMs === null) return false;
-  return bornMs > claudeStartMs + FOREIGN_BIRTH_MARGIN_MS;
+  // Claude can now switch transcript JSONLs inside one long-running process.
+  // A transcript born after pane start is no longer proof that it belongs to
+  // another topic; per-topic exclusions and explicit live replacement handle
+  // the safe cases without bouncing valid bindings.
+  return false;
 }
 
 function normalizePrompt(text: string): string {
@@ -559,10 +543,7 @@ export function findLiveReplacementJsonl(
   } catch {
     return null;
   }
-  // The bound file was written after the current claude started → it is
-  // (or plausibly was) this very process's transcript. No restart happened;
-  // a newer sibling can only belong to someone else.
-  if (claudeStartMs <= boundMtime) return null;
+  const inProcessRotation = claudeStartMs <= boundMtime;
   const now = Date.now();
   const dir = path.dirname(currentJsonlPath);
   const exclude = excludedJsonls(topicId);
@@ -575,8 +556,12 @@ export function findLiveReplacementJsonl(
       try {
         const s = fs.statSync(p);
         const ctime = s.birthtimeMs && s.birthtimeMs > 0 ? s.birthtimeMs : s.ctimeMs;
+        const transcriptStartMs = firstEntryTimestampMs(p);
+        const startedAfterEvidence = inProcessRotation
+          ? transcriptStartMs !== null && transcriptStartMs >= boundMtime - CTIME_GRACE_MS
+          : (transcriptStartMs ?? ctime) >= claudeStartMs - CTIME_GRACE_MS;
         if (
-          ctime >= claudeStartMs - CTIME_GRACE_MS &&
+          startedAfterEvidence &&
           s.mtimeMs > boundMtime + STALE_GAP_MS &&
           now - s.mtimeMs < RECENT_ACTIVITY_MS
         ) {

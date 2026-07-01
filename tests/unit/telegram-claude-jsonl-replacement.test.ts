@@ -10,7 +10,8 @@ import * as path from "path";
 const stateTmp = fs.mkdtempSync(path.join(os.tmpdir(), "tgstate-jsonl-"));
 process.env.TERMINALX_DATA_DIR = stateTmp;
 
-const { findLiveReplacementJsonl } = await import("@/lib/telegram/claude-transcript");
+const { bindingIsForeignToPane, findLiveReplacementJsonl } =
+  await import("@/lib/telegram/claude-transcript");
 const state = await import("@/lib/telegram/state");
 
 let tmp: string;
@@ -44,6 +45,27 @@ function newCase(): {
   };
 }
 
+function mkTranscript(dir: string, name: string, startedMs: number, mtimeSec: number): string {
+  const p = path.join(dir, name);
+  const sessionId = name.endsWith(".jsonl") ? name.slice(0, -6) : name;
+  fs.writeFileSync(
+    p,
+    [
+      { type: "mode", sessionId },
+      {
+        type: "user",
+        timestamp: new Date(startedMs).toISOString(),
+        sessionId,
+        message: { content: "hello" },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n"
+  );
+  fs.utimesSync(p, mtimeSec, mtimeSec);
+  return p;
+}
+
 describe("findLiveReplacementJsonl", () => {
   const nowSec = Math.floor(Date.now() / 1000);
   const TOPIC = 9999; // not registered with any watcher → claimedJsonls is empty
@@ -73,6 +95,33 @@ describe("findLiveReplacementJsonl", () => {
     mk("someone-elses.jsonl", nowSec - 10);
     const longRunningMs = (nowSec - 86400) * 1000;
     expect(findLiveReplacementJsonl(TOPIC, bound, longRunningMs)).toBeNull();
+  });
+
+  it("does not mark an in-process rotated transcript as foreign", () => {
+    const { dir } = newCase();
+    const longRunningMs = (nowSec - 86400) * 1000;
+    mkTranscript(dir, "old-session.jsonl", longRunningMs + 5000, nowSec - 600);
+    const current = mkTranscript(dir, "new-session.jsonl", (nowSec - 300) * 1000, nowSec - 10);
+
+    expect(bindingIsForeignToPane(current, longRunningMs)).toBe(false);
+  });
+
+  it("does not mark newer transcripts as foreign for long-running Claude panes", () => {
+    const { dir } = newCase();
+    const longRunningMs = (nowSec - 86400) * 1000;
+    mkTranscript(dir, "pane-session.jsonl", longRunningMs + 5000, nowSec - 200);
+    const current = mkTranscript(dir, "other-session.jsonl", (nowSec - 300) * 1000, nowSec - 10);
+
+    expect(bindingIsForeignToPane(current, longRunningMs)).toBe(false);
+  });
+
+  it("rotates when the same long-running claude process switches transcript files", () => {
+    const { mk, dir } = newCase();
+    const bound = mk("old-session.jsonl", nowSec - 600);
+    const live = mkTranscript(dir, "new-session.jsonl", (nowSec - 300) * 1000, nowSec - 10);
+    const longRunningMs = (nowSec - 86400) * 1000;
+
+    expect(findLiveReplacementJsonl(TOPIC, bound, longRunningMs)).toBe(live);
   });
 
   it("rejects candidates created before the claude restart", () => {

@@ -52,6 +52,34 @@ describe("extractSelectionPrompt", () => {
     expect(prompt!.text).not.toContain("Some earlier assistant output");
   });
 
+  it("extracts Claude inline session rating prompts", () => {
+    const prompt = extractSelectionPrompt(`
+Some Claude output
+
+● How is Claude doing this session? (optional)
+  1: Bad    2: Fine   3: Good   0: Dismiss
+
+`);
+
+    expect(prompt).not.toBeNull();
+    expect(prompt!.text).toContain("How is Claude doing this session?");
+    expect(prompt!.text).toContain("1. Bad");
+    expect(prompt!.text).toContain("0. Dismiss");
+  });
+
+  it("extracts Claude transcript consent prompts", () => {
+    const prompt = extractSelectionPrompt(`
+● Can Anthropic look at your session transcript to help us improve Claude Code?
+  y: Yes    n: No     d: Don't ask again
+
+`);
+
+    expect(prompt).not.toBeNull();
+    expect(prompt!.text).toContain("Can Anthropic look at your session transcript");
+    expect(prompt!.text).toContain("y. Yes");
+    expect(prompt!.text).toContain("d. Don't ask again");
+  });
+
   it("ignores a plain numbered list with no selection cursor", () => {
     const prose = `Here is the plan:
 1. First do this
