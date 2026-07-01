@@ -17,6 +17,10 @@ function listenOn(port: number): Promise<net.Server> {
   });
 }
 
+function isAddressInUse(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException)?.code === "EADDRINUSE";
+}
+
 describe("workspace port allocation", () => {
   beforeEach(() => {
     claimedMeta = [];
@@ -55,12 +59,18 @@ describe("workspace port allocation", () => {
   });
 
   it("skips a port that is in use by a live listener", async () => {
-    const srv = await listenOn(4100);
+    let srv: net.Server | null = null;
+    try {
+      srv = await listenOn(4100);
+    } catch (err) {
+      if (!isAddressInUse(err)) throw err;
+    }
+
     try {
       const port = await allocateWorkspacePort();
       expect(port).not.toBe(4100);
     } finally {
-      srv.close();
+      srv?.close();
     }
   });
 

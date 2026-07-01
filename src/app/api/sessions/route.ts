@@ -327,7 +327,7 @@ export async function POST(req: NextRequest) {
       try {
         // Attach in the bot-owning graph so its streamer has a single owner.
         const ensure = getEnsureTopic() ?? ensureTopicForSession;
-        const result = await ensure(identity, finalName, "off");
+        const result = await ensure(identity, finalName, "chat");
         telegramTopic = result.topic;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

@@ -19,6 +19,9 @@ describe("telegram auth configuration", () => {
   it("does not configure the bot without a valid forum chat id", async () => {
     process.env.TERMINALX_TELEGRAM_BOT_TOKEN = "123:token";
     process.env.TERMINALX_TELEGRAM_ALLOWED_USERS = "100:admin";
+    delete process.env.TERMINALX_TELEGRAM_WEBHOOK_URL;
+    delete process.env.TERMINALX_TELEGRAM_WEBHOOK_SECRET;
+    delete process.env.TERMINALX_TELEGRAM_FORUM_CHAT_ID;
 
     const { botIsConfigured } = await loadTelegramAuth();
 

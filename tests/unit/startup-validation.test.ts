@@ -30,6 +30,7 @@ describe("startup validation", () => {
   it("requires an admin password on first local-auth startup", async () => {
     process.env.TERMINALX_AUTH_MODE = "local";
     process.env.TERMINALX_JWT_SECRET = "x".repeat(40);
+    delete process.env.TERMINALX_ADMIN_PASSWORD;
     const { validateStartupConfiguration } = await import("@/lib/startup-validation");
 
     const result = validateStartupConfiguration({ host: "127.0.0.1", cwd: tmp });

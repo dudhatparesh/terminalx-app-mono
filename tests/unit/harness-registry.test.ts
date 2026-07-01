@@ -47,6 +47,10 @@ describe("harness registry", () => {
     expect(getHarness("cursor")?.command.optionFlags ?? []).toEqual([]);
   });
 
+  it("declares --yolo as a default Codex argument", () => {
+    expect(getHarness("codex")?.command.baseArgs).toEqual(["--yolo"]);
+  });
+
   it("listHarnesses returns the full descriptor list", () => {
     expect(listHarnesses()).toBe(HARNESSES);
     expect(listHarnesses().map((h) => h.id)).toEqual(HARNESS_IDS);

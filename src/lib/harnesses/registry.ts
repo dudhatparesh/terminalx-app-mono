@@ -40,8 +40,9 @@ export const HARNESSES: HarnessDescriptor[] = [
     label: "Codex",
     color: "#5ccfe6",
     auth: "cli",
-    // Issue #11: Codex selects its model with `-m <id>` (no plan-mode flag).
-    command: { bin: "codex", modelFlag: "-m" },
+    // Codex sessions run in yolo mode by default; model selection still uses
+    // `-m <id>` when an explicit Codex model is configured.
+    command: { bin: "codex", baseArgs: ["--yolo"], modelFlag: "-m" },
   },
   {
     id: "cursor",

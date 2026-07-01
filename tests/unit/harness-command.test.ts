@@ -24,8 +24,8 @@ describe("commandForHarness", () => {
     expect(commandForHarness("claude")).toBe(legacyWrapper("claude"));
   });
 
-  it("emits the byte-identical legacy wrapper for codex", () => {
-    expect(commandForHarness("codex")).toBe(legacyWrapper("codex"));
+  it("runs codex with --yolo by default", () => {
+    expect(commandForHarness("codex")).toBe(legacyWrapper("codex", ["--yolo"]));
   });
 
   it("appends --dangerously-skip-permissions to claude when opted in (byte-identical)", () => {
@@ -36,7 +36,7 @@ describe("commandForHarness", () => {
 
   it("ignores dangerouslySkipPermissions for codex (flag not declared)", () => {
     const cmd = commandForHarness("codex", { dangerouslySkipPermissions: true });
-    expect(cmd).toBe(legacyWrapper("codex"));
+    expect(cmd).toBe(legacyWrapper("codex", ["--yolo"]));
     expect(cmd).not.toContain("--dangerously-skip-permissions");
   });
 
@@ -57,7 +57,7 @@ describe("commandForHarness", () => {
 
     it("appends the codex model flag (-m) when a model is set", () => {
       const cmd = commandForHarness("codex", { model: "gpt-5-codex" });
-      expect(cmd).toBe(legacyWrapper("codex", ["-m", "gpt-5-codex"]));
+      expect(cmd).toBe(legacyWrapper("codex", ["--yolo", "-m", "gpt-5-codex"]));
     });
 
     it("appends the opencode model flag when a model is set", () => {
@@ -98,7 +98,9 @@ describe("commandForHarness", () => {
     });
 
     it("does not append a plan-mode flag for harnesses that do not support it", () => {
-      expect(commandForHarness("codex", { planMode: true })).toBe(legacyWrapper("codex"));
+      expect(commandForHarness("codex", { planMode: true })).toBe(
+        legacyWrapper("codex", ["--yolo"])
+      );
     });
   });
 
@@ -130,6 +132,7 @@ describe("ai-sessions back-compat shim", () => {
     const { commandForKind, isValidKind } = await import("@/lib/ai-sessions");
     expect(commandForKind("bash")).toBeNull();
     expect(commandForKind("claude")).toBe(legacyWrapper("claude"));
+    expect(commandForKind("codex")).toBe(legacyWrapper("codex", ["--yolo"]));
     expect(isValidKind("bash")).toBe(true);
     expect(isValidKind("claude")).toBe(true);
     expect(isValidKind("codex")).toBe(true);
