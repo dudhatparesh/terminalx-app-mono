@@ -359,6 +359,43 @@ function resolveJsonlForSession(opts: {
   return { path: best.candidate.path, offset: best.match.offset };
 }
 
+function resolveJsonlBySessionStart(opts: {
+  cwd?: string;
+  sessionStartedMs?: number;
+  exclude: Set<string>;
+}): JsonlMatch | null {
+  if (typeof opts.sessionStartedMs !== "number") return null;
+  const lowerBound = opts.sessionStartedMs - 30_000;
+  const upperBound = opts.sessionStartedMs + 5 * 60_000;
+  const candidates = listCodexJsonls(opts.cwd)
+    .filter((candidate) => !opts.exclude.has(candidate.path))
+    .filter((candidate) => {
+      const started = candidate.sessionStartedMs ?? candidate.ctimeMs;
+      return started >= lowerBound && started <= upperBound && candidate.mtimeMs >= lowerBound;
+    })
+    .sort((a, b) => {
+      const aStarted = a.sessionStartedMs ?? a.ctimeMs;
+      const bStarted = b.sessionStartedMs ?? b.ctimeMs;
+      const startDelta =
+        Math.abs(aStarted - opts.sessionStartedMs!) - Math.abs(bStarted - opts.sessionStartedMs!);
+      if (startDelta !== 0) return startDelta;
+      return b.mtimeMs - a.mtimeMs;
+    });
+
+  if (candidates.length === 0) return null;
+  const best = candidates[0]!;
+  const second = candidates[1];
+  if (second) {
+    const bestStarted = best.sessionStartedMs ?? best.ctimeMs;
+    const secondStarted = second.sessionStartedMs ?? second.ctimeMs;
+    const bestDistance = Math.abs(bestStarted - opts.sessionStartedMs);
+    const secondDistance = Math.abs(secondStarted - opts.sessionStartedMs);
+    if (secondDistance - bestDistance < 5000) return null;
+  }
+
+  return { path: best.path, offset: 0 };
+}
+
 export function findCodexJsonlForSession(opts: {
   cwd?: string;
   sinceMs: number;
@@ -366,7 +403,7 @@ export function findCodexJsonlForSession(opts: {
   promptText: string;
   sessionStartedMs?: number;
 }): string | null {
-  return resolveJsonlForSession(opts)?.path ?? null;
+  return resolveJsonlForSession(opts)?.path ?? resolveJsonlBySessionStart(opts)?.path ?? null;
 }
 
 function renderEntry(entry: CodexEntry): string | null {
@@ -398,6 +435,13 @@ export function startCodexTranscript(
       cwd: opts.cwd,
       sinceMs: opts.sinceMs,
       promptText: opts.promptText,
+      sessionStartedMs: opts.sessionStartedMs,
+      exclude: excludedJsonls(topicId),
+    });
+  }
+  if (!match && opts.cwd && typeof opts.sessionStartedMs === "number") {
+    match = resolveJsonlBySessionStart({
+      cwd: opts.cwd,
       sessionStartedMs: opts.sessionStartedMs,
       exclude: excludedJsonls(topicId),
     });

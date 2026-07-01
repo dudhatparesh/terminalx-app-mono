@@ -177,6 +177,67 @@ describe("telegram Codex transcript routing", () => {
     ).toBe(expected);
   });
 
+  it("binds a web-started Codex transcript by cwd and session start without a Telegram prompt", async () => {
+    const cwd = "/work/project";
+    const jsonl = writeCodexJsonl({
+      name: "rollout-web.jsonl",
+      cwd,
+      sessionStartedAt: "2026-04-27T18:00:05.000Z",
+      reply: "web response",
+      replyAt: "2026-04-27T18:00:12.000Z",
+    });
+    writeCodexJsonl({
+      name: "rollout-later.jsonl",
+      cwd,
+      sessionStartedAt: "2026-04-27T18:10:00.000Z",
+      reply: "wrong response",
+      replyAt: "2026-04-27T18:10:12.000Z",
+    });
+    const bot = {
+      api: {
+        sendMessage: vi.fn().mockResolvedValue({}),
+      },
+    } as unknown as Bot;
+    const { startCodexTranscript } = await loadTranscriptModule();
+
+    const started = startCodexTranscript(bot, 1, 101, {
+      cwd,
+      sessionStartedMs: Date.parse("2026-04-27T18:00:00.000Z"),
+    });
+
+    expect(started?.jsonl).toBe(jsonl);
+    await vi.waitFor(() =>
+      expect(bot.api.sendMessage).toHaveBeenCalledWith(
+        1,
+        "web response",
+        expect.objectContaining({ message_thread_id: 101, parse_mode: "MarkdownV2" })
+      )
+    );
+    started?.stop();
+  });
+
+  it("refuses to bind a promptless transcript that started much later", async () => {
+    const cwd = "/work/project";
+    writeCodexJsonl({
+      name: "rollout-too-late.jsonl",
+      cwd,
+      sessionStartedAt: "2026-04-27T18:10:00.000Z",
+      reply: "wrong response",
+      replyAt: "2026-04-27T18:10:12.000Z",
+    });
+    const { findCodexJsonlForSession } = await loadTranscriptModule();
+
+    expect(
+      findCodexJsonlForSession({
+        cwd,
+        sinceMs: Date.parse("2026-04-27T18:00:00.000Z"),
+        exclude: new Set(),
+        promptText: "",
+        sessionStartedMs: Date.parse("2026-04-27T18:00:00.000Z"),
+      })
+    ).toBeNull();
+  });
+
   it("does not let two topics tail the same persisted transcript", async () => {
     const jsonl = writeCodexJsonl({
       name: "rollout-a.jsonl",
